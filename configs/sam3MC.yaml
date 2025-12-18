@@ -1,7 +1,7 @@
 MODEL:
   PIXEL_MEAN : [127.5, 127.5, 127.5]
   PIXEL_STD : [127.5, 127.5, 127.5]
-  META_ARCHITECTURE: "SAM3Wrapper"
+  META_ARCHITECTURE: "SAM3MC"
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True

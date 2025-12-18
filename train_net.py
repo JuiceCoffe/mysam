@@ -57,6 +57,7 @@ from maft import (
 
 from sam3.config import add_sam3_config
 from sam3.modeling_d2 import SAM3Wrapper # 导入这个类就会自动触发 REGISTER
+from sam3.SAM3MC import SAM3MC
 
 
 

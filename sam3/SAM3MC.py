@@ -32,21 +32,18 @@ from sam3.model_builder import (
 )
 from sam3.model.data_misc import FindStage, interpolate
 
-# from maft.utils.text_templetes import VILD_PROMPT
-VILD_PROMPT = ["{}"]
+from maft.utils.text_templetes import VILD_PROMPT
+# VILD_PROMPT = ["{}"]
 
 
 @META_ARCH_REGISTRY.register()
-class SAM3Wrapper(nn.Module):
+class SAM3MC(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.device_type = cfg.MODEL.DEVICE
         self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(cfg.MODEL.PIXEL_STD).view(-1, 1, 1), False) 
         
-        self.predict_mode = cfg.MODEL.SAM3.PREDICT_MODE
-
-
         # -------------------------------------------------------
         # 2. 实例化 SAM3 Model
         # -------------------------------------------------------       
@@ -76,7 +73,7 @@ class SAM3Wrapper(nn.Module):
         else:
             inst_predictor = None
 
-        self.sam3_model = _create_sam3_model(
+        self.detector = _create_sam3_model(
             backbone,
             transformer,
             input_geometry_encoder,
@@ -86,7 +83,7 @@ class SAM3Wrapper(nn.Module):
             cfg.eval_only,
         )
         if cfg.eval_only:
-            self.sam3_model.eval()
+            self.detector.eval()
         print("SAM3创建成功!")
         # -------------------------------------------------------
         # 3. 训练配置
@@ -164,7 +161,7 @@ class SAM3Wrapper(nn.Module):
                 # this is needed to avoid oom, which may happen when num of class is large
                 bs = 128
                 for idx in range(0, len(self.train_class_names), bs):
-                    text_classifier.append(self.sam3_model.backbone.forward_text(self.train_class_names[idx:idx+bs], device=self.device).detach())
+                    text_classifier.append(self.detector.backbone.forward_text(self.train_class_names[idx:idx+bs], device=self.device).detach())
                 text_classifier = torch.cat(text_classifier, dim=0)
 
                 # average across templates and normalization.
@@ -179,35 +176,33 @@ class SAM3Wrapper(nn.Module):
                 self.category_overlapping_mask, self.test_num_templates, self.test_class_names = self.prepare_class_names_from_metadata(self.test_metadata[dataname], self.train_metadata)
                 text_classifier = []
                 language_mask = []
-                language_features = []
                 # this is needed to avoid oom, which may happen when num of class is large
                 bs = 128
                 print("Generating text classifier for", dataname, "with", len(self.test_class_names), "classes.")
                 for idx in range(0, len(self.test_class_names), bs):
-                    state_text = self.sam3_model.backbone.forward_text(self.test_class_names[idx:idx+bs], device=self.device)
+                    state_text = self.detector.backbone.forward_text(self.test_class_names[idx:idx+bs], device=self.device)
 
                     batch_text_feat = state_text["language_features"].detach()
                     mask = state_text["language_mask"] # B, L
                     batch_text_feat = batch_text_feat.permute(1,0,2) # -> B, L, D 
-                    language_features.append(batch_text_feat.clone())
                     text_classifier.append(batch_text_feat)
-                    language_mask.append(mask.unsqueeze(1)) # B, 1, L
+                    language_mask.append(mask) # B, L
                 text_classifier = torch.cat(text_classifier, dim=0)
-                language_mask = torch.cat(language_mask, dim=0)
-                language_features = torch.cat(language_features, dim=0) # (num_classes, VILD_PROMPT, L, D)
+                language_mask = torch.cat(language_mask, dim=0) # (num_names * VILD_PROMPT,  L)
                 # average across templates and normalization.
-                text_classifier = text_classifier.reshape(text_classifier.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), text_classifier.shape[-2], text_classifier.shape[-1])
-                # language_mask = language_mask.reshape(language_mask.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), language_mask.shape[-1])
+                text_classifier = text_classifier.reshape(text_classifier.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), text_classifier.shape[-2], text_classifier.shape[-1]) # num_names, VILD_PROMPT, L, D
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
-                text_classifier[language_mask] = 0.0 
-                text_classifier = text_classifier.mean(-2)
+
+                text_classifier[language_mask.view(text_classifier.shape[0],text_classifier.shape[1],text_classifier.shape[2])] = 0.0 # [num_names, VILD_PROMPT, L, D] 掩码掉 padding 部分
+                language_features = text_classifier.mean(1) # num_names, L, D
+                text_classifier = text_classifier.mean(-2) 
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 text_classifier = text_classifier.mean(1)
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
-                self.language_features = language_features
-                # self.language_features = language_features.reshape(language_features.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), language_features.shape[1], language_features.shape[2])
-                self.language_mask = language_mask
-                self.test_text_classifier = text_classifier
+                
+                self.language_features = language_features # num_names , L, D
+                self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                self.test_text_classifier = text_classifier 
                 self.test_dataname = dataname
             return self.test_text_classifier, self.test_num_templates
 
@@ -232,7 +227,7 @@ class SAM3Wrapper(nn.Module):
         meta = batched_inputs[0]["meta"]
         
         # 图形特征
-        backbone_out_vision = self.sam3_model.backbone.forward_image(images.tensor)
+        backbone_out_vision = self.detector.backbone.forward_image(images.tensor)
         img_feat = backbone_out_vision["vision_features"] # B, C, H', W'
         backbone_fpn = backbone_out_vision["backbone_fpn"]
     
@@ -243,88 +238,202 @@ class SAM3Wrapper(nn.Module):
         text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
 
         # others
-        geometric_prompt = self.sam3_model._get_dummy_prompt()
+        geometric_prompt = self.detector._get_dummy_prompt()
         
-        if self.predict_mode == "Cycle": 
-
-            gt_classes = get_gt_labels_from_sem_seg(batched_inputs[0]["sem_seg"].to(self.device))
+        batch_gt_names_idx = []
+        for i in range(batch_size):
+            gt_classes = get_gt_labels_from_sem_seg(batched_inputs[i]["sem_seg"].to(self.device))
             gt_names_idx = []
             cur_idx = 0
             for i,num_t in enumerate(num_templates): 
                 if i in gt_classes:
                     gt_names_idx += list(range(cur_idx, cur_idx + num_t))
                 cur_idx += num_t
+            batch_gt_names_idx.append(gt_names_idx)
+
+        # =======================================================
+        
+        language_features_input = []
+
+        USE_GT_NAMES_ONLY = True
+        
+        if USE_GT_NAMES_ONLY:
+            language_features_input = [self.language_features[batch_gt_names_idx[i],:,:] for i in range(batch_size)]
+            language_features_input = torch.cat(language_features_input, dim=0) # (B, num_names * L, dim)
+            language_mask_input = [self.language_mask[batch_gt_names_idx[i],:] for i in range(batch_size)]
+            language_mask_input = torch.cat(language_mask_input, dim=0) # (B, num_names * L)
+            if batch_size == 1:
+                language_features_input = language_features_input.unsqueeze(0)
+                language_mask_input = language_mask_input.unsqueeze(0)
+
+        else:
+            language_features_input = self.language_features
+            language_mask_input = self.language_mask
+
+        # print("shape of input:",language_features_input.shape, language_mask_input.shape)
+        language_features_input = language_features_input.reshape(batch_size, -1, language_features_input.shape[-1]) # (B, num_names * L, dim)
+        language_mask_input = language_mask_input.reshape(batch_size, -1) # (B, num_names * L)
+        # print("shape of input after reshape:",language_features_input.shape, language_mask_input.shape)
+        
+
+        backbone_out={
+            "img_batch_all_stages": img_feat,
+            "vision_pos_enc": backbone_out_vision["vision_pos_enc"],
+            "backbone_fpn": backbone_fpn,
+            "language_features": language_features_input.permute(1, 0, 2), # (num_names * L, B, dim)
+            "language_mask": language_mask_input, # B, (num_names * L)
+        }
+        # outputs = self.detector.forward_grounding(
+        #     backbone_out = backbone_out,
+        #     find_input=self.find_stage,
+        #     geometric_prompt= geometric_prompt,
+        #     find_target=None,
+        # )
+
+        #=================================
+        find_input = self.find_stage
+        
+
+        with torch.profiler.record_function("SAM3Image._encode_prompt"):
+            prompt, prompt_mask, backbone_out = self.detector._encode_prompt(
+                backbone_out, find_input, geometric_prompt
+            )
+        # Run the encoder
+        with torch.profiler.record_function("SAM3Image._run_encoder"):
+            backbone_out, encoder_out, _ = self.detector._run_encoder(
+                backbone_out, find_input, prompt, prompt_mask
+            )
+        out = {
+            "encoder_hidden_states": encoder_out["encoder_hidden_states"],
+            "prev_encoder_out": {
+                "encoder_out": encoder_out,
+                "backbone_out": backbone_out,
+            },
+        }
+
+        # Run the decoder
+        with torch.profiler.record_function("SAM3Image._run_decoder"):
+            out, hs = self.detector._run_decoder(
+                memory=out["encoder_hidden_states"],
+                pos_embed=encoder_out["pos_embed"],
+                src_mask=encoder_out["padding_mask"],
+                out=out,
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+                encoder_out=encoder_out,
+            )
+
+        # Run segmentation heads
+        with torch.profiler.record_function("SAM3Image._run_segmentation_heads"):
+            self.detector._run_segmentation_heads(
+                out=out,
+                backbone_out=backbone_out,
+                img_ids=find_input.img_ids,
+                vis_feat_sizes=encoder_out["vis_feat_sizes"],
+                encoder_hidden_states=out["encoder_hidden_states"],
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+                hs=hs,
+            )
+        
+        if self.detector.training or self.detector.num_interactive_steps_val > 0:
+            self.detector._compute_matching(out, self.detector.back_convert(find_target))
+
+        #========================================
+        outputs = out
+        # print("outputs keys:", outputs.keys())
+
+        out_bbox = outputs["pred_boxes"]
 
 
-            names_masks = []
-            for i in range(len(self.language_features)):
-                if i not in gt_names_idx:
-                    names_masks.append(torch.zeros((1, img_h, img_w), device=self.device))
-                    continue
-                backbone_out={
-                    "img_batch_all_stages": img_feat,
-                    "vision_pos_enc": backbone_out_vision["vision_pos_enc"],
-                    "backbone_fpn": backbone_fpn,
-                    "language_features": self.language_features[i,:,:].unsqueeze(1),
-                    "language_mask": self.language_mask[i,:],
-                }
-                outputs = self.sam3_model.forward_grounding(
-                    backbone_out = backbone_out,
-                    find_input=self.find_stage,
-                    geometric_prompt= geometric_prompt,
-                    find_target=None,
-                )
+        out_masks = outputs["pred_masks"]
+        out_masks = interpolate(
+            out_masks,
+            (img_h, img_w),
+            mode="bilinear",
+            align_corners=False,
+        ).sigmoid()
 
-                out_bbox = outputs["pred_boxes"]
+        presence_score = torch.ones(batch_size,1, device=self.device)  # 由于多类别情况下 presence_logit_dec 不适用，暂时全部设为 1 [B, 1]
+        # presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1) # 在多类别情况下认为失效
+
+        out_logits = outputs["pred_logits"] 
+        out_probs = out_logits.sigmoid() # B, N, 1
+        # out_probs = (out_probs * presence_score).squeeze(-1) # 实例的概率
 
 
-                out_masks = outputs["pred_masks"]
-                out_masks = interpolate(
-                    out_masks,
-                    (img_h, img_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).sigmoid()
+
+        out_semseg = outputs["semantic_seg"]
+        out_semseg = F.interpolate(
+            out_semseg,
+            size=(img_h, img_w),
+            mode="bilinear",
+            align_corners=False,
+        ).sigmoid()
 
 
-                presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
+        # print("out_masks shape:", out_masks.shape, "out_probs shape:", out_probs.shape, "out_semseg shape:", out_semseg.shape, "presence_score shape:", presence_score.shape)
+        # out_masks shape: torch.Size([1, 200, 1008, 1008]) out_probs shape: torch.Size([1, 200]) out_semseg shape: torch.Size([1, 1, 1008, 1008]) presence_score shape: torch.Size([1, 1, 1])
+        
 
-                out_logits = outputs["pred_logits"] 
-                out_probs = out_logits.sigmoid() # B, N, 1
-                out_probs = (out_probs * presence_score).squeeze(-1) # 实例的概率
+        B, N, H, W = out_masks.shape
+        C = text_classifier.shape[0] # num_names
 
 
-                out_semseg = outputs["semantic_seg"]
-                out_semseg = F.interpolate(
-                    out_semseg,
-                    size=(img_h, img_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).sigmoid()
+        queries_masks = torch.mul(out_masks,out_probs.unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分 [B, N, H, W]
+        # 现在还需要对query分类
+        queries = outputs["queries"]
+        # print("queries shape:", queries.shape)
+        # print("classifier shape:", text_classifier.shape)
+        queries_names_probs = torch.einsum("bnd,cd->bnc", queries, text_classifier).sigmoid() # B, N, num_names
 
-                # print("out_masks shape:", out_masks.shape, "out_probs shape:", out_probs.shape, "out_semseg shape:", out_semseg.shape, "presence_score shape:", presence_score.shape)
-                # out_masks shape: torch.Size([1, 200, 1008, 1008]) out_probs shape: torch.Size([1, 200]) out_semseg shape: torch.Size([1, 1, 1008, 1008]) presence_score shape: torch.Size([1, 1, 1])
-                instance_masks = torch.mul(out_masks,out_probs.unsqueeze(-1).unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分
-                semantic_masks = torch.mul(out_semseg , presence_score.unsqueeze(-1))
-                cls_mask = torch.max(
-                    torch.max(instance_masks, dim=1).values,
-                    torch.max(semantic_masks, dim=1).values,
+        queries_seg_result = torch.zeros((B, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
 
-                ) # B, H, W
-                
-                names_masks.append(cls_mask)
-            
-            names_masks = torch.stack(names_masks, dim=1)
+        for n in range(queries.shape[1]):
+            query_instance_result = (queries_names_probs[:, n, :].unsqueeze(-1).unsqueeze(-1) * queries_masks[:, n, :, :].unsqueeze(1)) # [B, num_names, 1, 1] * [B, 1, H, W] -> [B, num_names, H, W]
+            queries_seg_result = torch.max(queries_seg_result, query_instance_result)
 
-            final_seg_logits = []
-            cur_idx = 0
-            for num_t in num_templates: 
-                final_seg_logits.append(names_masks[:, cur_idx: cur_idx + num_t,:,:].max(1).values)
-                cur_idx += num_t
-            final_seg_logits = torch.stack(final_seg_logits, dim=1)
+
+        # semantic_masks = torch.mul(out_semseg , presence_score.unsqueeze(-1)) 也用不了了
+
+        # 用pixel_embed点积分类器代替semantic head
+        pixel_embed = outputs["pixel_embed"].permute(0,2,3,1) # B, H, W, D
+        # print("pixel_embed shape:", pixel_embed.shape)
+        sem_seg_logits = torch.einsum("bhwd,cd->bhwc", pixel_embed, text_classifier) # B, H, W, num_names
+        sem_seg_logits = sem_seg_logits.permute(0,3,1,2) # B, num_names, H, W
+        sem_seg_probs = sem_seg_logits.sigmoid()
+        # print("sem_seg_probs shape:", sem_seg_probs.shape)
+
+
+        #整合两部分的结果
+        sem_seg_logits = F.interpolate(
+            sem_seg_probs,
+            size=(img_h, img_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        seg_logits = torch.max(queries_seg_result, sem_seg_logits) # [B, num_names, H, W]
+        if USE_GT_NAMES_ONLY:
+            for b in range(batch_size):
+                gtcls_mask = torch.ones_like(seg_logits[b], dtype=torch.bool)
+                gtcls_mask[batch_gt_names_idx[b],:,:] = False
+                seg_logits[b][gtcls_mask] = 0.0
+        
+
+        # =======================================================
+        
+        
+
+        final_seg_logits = []
+        cur_idx = 0
+        for num_t in num_templates: 
+            final_seg_logits.append(seg_logits[:, cur_idx: cur_idx + num_t,:,:].max(1).values)
+            cur_idx += num_t
+        final_seg_logits = torch.stack(final_seg_logits, dim=1)
 
         results = []
-        for i in range(len(batched_inputs)):
+        for i in range(batch_size):
             orig_size = (batched_inputs[i]["height"], batched_inputs[i]["width"]) # 没经过 resize 到 1008 的大小
             res = sem_seg_postprocess(
                 final_seg_logits[i], 

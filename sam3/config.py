@@ -20,7 +20,6 @@ def add_sam3_config(cfg):
     cfg.MODEL.SAM3.ENABLE_SEGMENTATION = True
     cfg.MODEL.SAM3.ENABLE_INST_INTERACTIVITY = False
     cfg.MODEL.SAM3.COMPILE = False
-    cfg.MODEL.SAM3.PREDICT_MODE = "Cycle"
     
     # 可以在这里添加更多关于 Backbone/Transformer 的细节参数
     # cfg.MODEL.SAM3.NUM_FEATURE_LEVELS = 1

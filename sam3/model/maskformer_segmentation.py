@@ -320,4 +320,5 @@ class UniversalSegmentationHead(SegmentationHead):
             "pred_masks": mask_pred,
             "semantic_seg": self.semantic_seg_head(pixel_embed),
             "presence_logit": presence_logit,
+            "pixel_embed": pixel_embed, # 新增高分辨率特征图输出
         }

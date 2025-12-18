@@ -44,8 +44,6 @@ class SAM3Wrapper(nn.Module):
         self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(cfg.MODEL.PIXEL_STD).view(-1, 1, 1), False) 
         
-        self.predict_mode = cfg.MODEL.SAM3.PREDICT_MODE
-
 
         # -------------------------------------------------------
         # 2. 实例化 SAM3 Model
@@ -245,85 +243,84 @@ class SAM3Wrapper(nn.Module):
         # others
         geometric_prompt = self.detector._get_dummy_prompt()
         
-        if self.predict_mode == "Cycle": 
 
-            gt_classes = get_gt_labels_from_sem_seg(batched_inputs[0]["sem_seg"].to(self.device))
-            gt_names_idx = []
-            cur_idx = 0
-            for i,num_t in enumerate(num_templates): 
-                if i in gt_classes:
-                    gt_names_idx += list(range(cur_idx, cur_idx + num_t))
-                cur_idx += num_t
-
-
-            names_masks = []
-            for i in range(len(self.language_features)):
-
-                # if i not in gt_names_idx:
-                #     names_masks.append(torch.zeros((1, img_h, img_w), device=self.device))
-                #     continue
-
-                backbone_out={
-                    "img_batch_all_stages": img_feat,
-                    "vision_pos_enc": backbone_out_vision["vision_pos_enc"],
-                    "backbone_fpn": backbone_fpn,
-                    "language_features": self.language_features[i,:,:].unsqueeze(1),
-                    "language_mask": self.language_mask[i,:],
-                }
-                outputs = self.detector.forward_grounding(
-                    backbone_out = backbone_out,
-                    find_input=self.find_stage,
-                    geometric_prompt= geometric_prompt,
-                    find_target=None,
-                )
-
-                out_bbox = outputs["pred_boxes"]
+        gt_classes = get_gt_labels_from_sem_seg(batched_inputs[0]["sem_seg"].to(self.device))
+        gt_names_idx = []
+        cur_idx = 0
+        for i,num_t in enumerate(num_templates): 
+            if i in gt_classes:
+                gt_names_idx += list(range(cur_idx, cur_idx + num_t))
+            cur_idx += num_t
 
 
-                out_masks = outputs["pred_masks"]
-                out_masks = interpolate(
-                    out_masks,
-                    (img_h, img_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).sigmoid()
+        names_masks = []
+        for i in range(len(self.language_features)):
+
+            # if i not in gt_names_idx:
+            #     names_masks.append(torch.zeros((1, img_h, img_w), device=self.device))
+            #     continue
+
+            backbone_out={
+                "img_batch_all_stages": img_feat,
+                "vision_pos_enc": backbone_out_vision["vision_pos_enc"],
+                "backbone_fpn": backbone_fpn,
+                "language_features": self.language_features[i,:,:].unsqueeze(1),
+                "language_mask": self.language_mask[i,:],
+            }
+            outputs = self.detector.forward_grounding(
+                backbone_out = backbone_out,
+                find_input=self.find_stage,
+                geometric_prompt= geometric_prompt,
+                find_target=None,
+            )
+
+            out_bbox = outputs["pred_boxes"]
 
 
-                presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
+            out_masks = outputs["pred_masks"]
+            out_masks = interpolate(
+                out_masks,
+                (img_h, img_w),
+                mode="bilinear",
+                align_corners=False,
+            ).sigmoid()
 
-                out_logits = outputs["pred_logits"] 
-                out_probs = out_logits.sigmoid() # B, N, 1
-                out_probs = (out_probs * presence_score).squeeze(-1) # 实例的概率
+
+            presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1)
+
+            out_logits = outputs["pred_logits"] 
+            out_probs = out_logits.sigmoid() # B, N, 1
+            out_probs = (out_probs * presence_score).squeeze(-1) # 实例的概率
 
 
-                out_semseg = outputs["semantic_seg"]
-                out_semseg = F.interpolate(
-                    out_semseg,
-                    size=(img_h, img_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).sigmoid()
+            out_semseg = outputs["semantic_seg"]
+            out_semseg = F.interpolate(
+                out_semseg,
+                size=(img_h, img_w),
+                mode="bilinear",
+                align_corners=False,
+            ).sigmoid()
 
-                # print("out_masks shape:", out_masks.shape, "out_probs shape:", out_probs.shape, "out_semseg shape:", out_semseg.shape, "presence_score shape:", presence_score.shape)
-                # out_masks shape: torch.Size([1, 200, 1008, 1008]) out_probs shape: torch.Size([1, 200]) out_semseg shape: torch.Size([1, 1, 1008, 1008]) presence_score shape: torch.Size([1, 1, 1])
-                instance_masks = torch.mul(out_masks,out_probs.unsqueeze(-1).unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分
-                semantic_masks = torch.mul(out_semseg , presence_score.unsqueeze(-1))
-                cls_mask = torch.max(
-                    torch.max(instance_masks, dim=1).values,
-                    torch.max(semantic_masks, dim=1).values,
+            # print("out_masks shape:", out_masks.shape, "out_probs shape:", out_probs.shape, "out_semseg shape:", out_semseg.shape, "presence_score shape:", presence_score.shape)
+            # out_masks shape: torch.Size([1, 200, 1008, 1008]) out_probs shape: torch.Size([1, 200]) out_semseg shape: torch.Size([1, 1, 1008, 1008]) presence_score shape: torch.Size([1, 1, 1])
+            instance_masks = torch.mul(out_masks,out_probs.unsqueeze(-1).unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分
+            semantic_masks = torch.mul(out_semseg , presence_score.unsqueeze(-1))
+            cls_mask = torch.max(
+                torch.max(instance_masks, dim=1).values,
+                torch.max(semantic_masks, dim=1).values,
 
-                ) # B, H, W
-                
-                names_masks.append(cls_mask)
+            ) # B, H, W
             
-            names_masks = torch.stack(names_masks, dim=1)
+            names_masks.append(cls_mask)
+        
+        names_masks = torch.stack(names_masks, dim=1)
 
-            final_seg_logits = []
-            cur_idx = 0
-            for num_t in num_templates: 
-                final_seg_logits.append(names_masks[:, cur_idx: cur_idx + num_t,:,:].max(1).values)
-                cur_idx += num_t
-            final_seg_logits = torch.stack(final_seg_logits, dim=1)
+        final_seg_logits = []
+        cur_idx = 0
+        for num_t in num_templates: 
+            final_seg_logits.append(names_masks[:, cur_idx: cur_idx + num_t,:,:].max(1).values)
+            cur_idx += num_t
+        final_seg_logits = torch.stack(final_seg_logits, dim=1)
 
         results = []
         for i in range(len(batched_inputs)):
