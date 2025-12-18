@@ -389,11 +389,10 @@ class SAM3MC(nn.Module):
         projected_text_classifier = self.detector.segmentation_head.instance_seg_head(text_classifier.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1) # pixel_emd在与query乘之前过了这个
         projected_queries = self.detector.segmentation_head.mask_predictor.mask_embed(queries) # B, N, D
 
-        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, projected_text_classifier).sigmoid() # B, N, num_names
         queries_names_probs = torch.einsum("bnd,cd->bnc", queries, text_classifier).sigmoid() # B, N, num_names
-        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, text_classifier).sigmoid() # B, N, num_names
-        # queries_names_probs = torch.einsum("bnd,cd->bnc", queries, projected_text_classifier).sigmoid() # B, N, num_names
-        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, projected_text_classifier).sigmoid() # B, N, num_names
+        queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, text_classifier).sigmoid() # B, N, num_names
+        queries_names_probs = torch.einsum("bnd,cd->bnc", queries, projected_text_classifier).sigmoid() # B, N, num_names
+        queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, projected_text_classifier).sigmoid() # B, N, num_names
 
         queries_seg_result = torch.zeros((B, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
 
