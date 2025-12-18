@@ -112,7 +112,7 @@ class TransformerDecoderLayer(nn.Module):
         # self attention
         if self.self_attn is not None:
             if dac:
-                # we only apply self attention to the first half of the queries
+                # we only apply self attention to the first half of the  
                 assert tgt.shape[0] % 2 == 0
                 num_o2o_queries = tgt.shape[0] // 2
                 tgt_o2o = tgt[:num_o2o_queries]

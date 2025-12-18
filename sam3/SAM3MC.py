@@ -15,6 +15,7 @@ from detectron2.utils.memory import retry_if_cuda_oom
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.patches import Rectangle
 
 import os
 import numpy as np
@@ -126,6 +127,7 @@ class SAM3MC(nn.Module):
             train_class_names = split_labels(train_metadata.thing_classes)
         train_class_names = {l for label in train_class_names for l in label}
         category_overlapping_list = []
+        self.vis_class_names = class_names
         for test_class_names in class_names:
             is_overlapping = not set(train_class_names).isdisjoint(set(test_class_names)) 
             category_overlapping_list.append(is_overlapping)
@@ -310,7 +312,7 @@ class SAM3MC(nn.Module):
                 "backbone_out": backbone_out,
             },
         }
-
+        # print("keys of out before decoder:", out.keys()) # s(['encoder_hidden_states', 'prev_encoder_out'])
         # Run the decoder
         with torch.profiler.record_function("SAM3Image._run_decoder"):
             out, hs = self.detector._run_decoder(
@@ -323,6 +325,7 @@ class SAM3MC(nn.Module):
                 encoder_out=encoder_out,
             )
 
+        # print("keys of out after decoder:", out.keys()) # (['encoder_hidden_states', 'prev_encoder_out', 'presence_feats', 'queries', 'presence_logit_dec', 'pred_logits', 'pred_boxes', 'pred_boxes_xyxy'])
         # Run segmentation heads
         with torch.profiler.record_function("SAM3Image._run_segmentation_heads"):
             self.detector._run_segmentation_heads(
@@ -382,10 +385,15 @@ class SAM3MC(nn.Module):
 
         queries_masks = torch.mul(out_masks,out_probs.unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分 [B, N, H, W]
         # 现在还需要对query分类
-        queries = outputs["queries"]
-        # print("queries shape:", queries.shape)
-        # print("classifier shape:", text_classifier.shape)
+        queries = outputs["obj_queries"]
+        projected_text_classifier = self.detector.segmentation_head.instance_seg_head(text_classifier.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1) # pixel_emd在与query乘之前过了这个
+        projected_queries = self.detector.segmentation_head.mask_predictor.mask_embed(queries) # B, N, D
+
+        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, projected_text_classifier).sigmoid() # B, N, num_names
         queries_names_probs = torch.einsum("bnd,cd->bnc", queries, text_classifier).sigmoid() # B, N, num_names
+        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, text_classifier).sigmoid() # B, N, num_names
+        # queries_names_probs = torch.einsum("bnd,cd->bnc", queries, projected_text_classifier).sigmoid() # B, N, num_names
+        # queries_names_probs = torch.einsum("bnd,cd->bnc", projected_queries, projected_text_classifier).sigmoid() # B, N, num_names
 
         queries_seg_result = torch.zeros((B, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
 
@@ -413,24 +421,32 @@ class SAM3MC(nn.Module):
             align_corners=False,
         )
 
-        seg_logits = torch.max(queries_seg_result, sem_seg_logits) # [B, num_names, H, W]
+        # seg_logits = torch.max(queries_seg_result, sem_seg_logits) # [B, num_names, H, W]
+
+        # 目前先不合并
+        seg_logits = queries_seg_result
+        # seg_logits = sem_seg_logits
+
         if USE_GT_NAMES_ONLY:
             for b in range(batch_size):
                 gtcls_mask = torch.ones_like(seg_logits[b], dtype=torch.bool)
                 gtcls_mask[batch_gt_names_idx[b],:,:] = False
                 seg_logits[b][gtcls_mask] = 0.0
         
-
-        # =======================================================
-        
-        
-
         final_seg_logits = []
         cur_idx = 0
         for num_t in num_templates: 
             final_seg_logits.append(seg_logits[:, cur_idx: cur_idx + num_t,:,:].max(1).values)
             cur_idx += num_t
         final_seg_logits = torch.stack(final_seg_logits, dim=1)
+
+        pred_result = final_seg_logits[0].argmax(0)
+        visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_queries/{file_names[0]}_")
+        # visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_seg/{file_names[0]}_")
+
+        # =======================================================
+        
+
 
         results = []
         for i in range(batch_size):
@@ -467,4 +483,106 @@ def get_gt_labels_from_sem_seg(sem_seg):
     gt_labels = classes[classes != 255]
     
     return gt_labels.cpu().numpy().tolist()
+
+
+def visualize_segmentation(
+    pred_result, 
+    class_names, 
+    original_image_tensor, 
+    save_path="./show/result.png", 
+    fig_size=(15, 10)
+):
+    """
+    可视化分割结果，将原始图像和分割掩码并排显示在同一张图片中，并保存到文件。
+    图例会根据每个类别占有的像素数从多到少进行排序。
+
+    Arguments:
+        pred_result (torch.Tensor): 模型预测的分割结果，形状为 (H, W)，值为类别索引。
+        class_names (list): 一个包含分类器所有类别实际名称的列表。
+        original_image_tensor (torch.Tensor): 原始图像的张量，形状为 (C, H, W)。
+        save_path (str): 可视化结果的保存路径及文件名。
+        fig_size (tuple): 整张图的大小。
+    """
+    print(f"类别数: {len(class_names)}")
+
+    # 确保pred_result在CPU上并且是numpy数组
+    if isinstance(pred_result, torch.Tensor):
+        pred_result = pred_result.cpu().numpy()
+
+    # 检查是否是批处理的结果，如果是，则只取第一个样本
+    if len(pred_result.shape) == 3 and pred_result.shape[0] == 1:
+        pred_result = pred_result[0]
+    
+    height, width = pred_result.shape
+    num_classes = len(class_names)
+
+    # 1. 为所有可能的类别生成一个固定的随机颜色调色板
+    np.random.seed(0)  # 使用固定的种子以确保每次颜色一致
+    palette = np.random.randint(0, 255, size=(num_classes, 3))
+
+    # 2. 创建一个彩色的图像用于分割结果
+    color_image = np.zeros((height, width, 3), dtype=np.uint8)
+    for class_index in range(num_classes):
+        color_image[pred_result == class_index] = palette[class_index]
+
+    # 3. 统计每个类别的像素数
+    unique_classes, pixel_counts = np.unique(pred_result, return_counts=True)
+    
+    # 4. 将统计结果与类名结合，并按像素数降序排序
+    class_statistics = [
+        {
+            "index": class_index,
+            "name": class_names[class_index],
+            "count": pixel_counts[i]
+        }
+        for i, class_index in enumerate(unique_classes) if class_index < num_classes
+    ]
+    sorted_class_statistics = sorted(class_statistics, key=lambda x: x['count'], reverse=True)
+
+    # 创建保存目录
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    # 准备原始图像用于显示
+    original_image = original_image_tensor.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+
+    # 5. 绘制并排的图像
+    fig, ax = plt.subplots(1, 2, figsize=fig_size)
+
+    # 显示原始图像
+    ax[0].imshow(original_image)
+    ax[0].set_title("Original Image")
+    ax[0].axis('off')
+
+    # 显示分割结果
+    ax[1].imshow(color_image)
+    ax[1].set_title("Segmentation Result")
+    ax[1].axis('off')
+
+    # 6. 创建并放置图例
+    legend_elements = [
+        Rectangle((0, 0), 1, 1, color=palette[stats["index"]] / 255.0, 
+                  label=f"{stats['name']} ({stats['count']:,} px)")
+        for stats in sorted_class_statistics
+    ]
+
+    # 使用 fig.legend 将图例放置在整个图的底部
+    fig.legend(
+        handles=legend_elements,
+        loc='lower center',
+        bbox_to_anchor=(0.5, 0.01), # 将图例稍微向上移动一点，避免与边界重合
+        ncol=min(4, len(legend_elements)),  # 一行最多显示4个类别
+        frameon=False,
+        fontsize='small'
+    )
+
+    plt.tight_layout(rect=[0, 0.05, 1, 1]) # 调整布局为图例留出空间 (left, bottom, right, top)
+    
+    # 7. 保存最终的图像
+    try:
+        plt.savefig(save_path, bbox_inches='tight', pad_inches=0.1)
+        print(f"可视化结果已保存至: {save_path}")
+    except Exception as e:
+        print(f"保存文件时出错: {e}")
+
+    plt.close(fig)
 

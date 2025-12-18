@@ -29,10 +29,11 @@ class MaskPredictor(nn.Module):
         if len(obj_queries.shape) == 3:
             if pixel_embed.ndim == 3:
                 # batch size was omitted
-                mask_preds = torch.einsum(
+                mask_preds = torch.einsum(  
                     "bqc,chw->bqhw", self.mask_embed(obj_queries), pixel_embed
                 )
             else:
+                # 走的这
                 mask_preds = torch.einsum(
                     "bqc,bchw->bqhw", self.mask_embed(obj_queries), pixel_embed
                 )
@@ -314,6 +315,7 @@ class UniversalSegmentationHead(SegmentationHead):
         elif self.aux_masks:
             mask_pred = self.mask_predictor(obj_queries, instance_embeds)
         else:
+            # 用的是这个
             mask_pred = self.mask_predictor(obj_queries[-1], instance_embeds)
 
         return {
@@ -321,4 +323,6 @@ class UniversalSegmentationHead(SegmentationHead):
             "semantic_seg": self.semantic_seg_head(pixel_embed),
             "presence_logit": presence_logit,
             "pixel_embed": pixel_embed, # 新增高分辨率特征图输出
+            "instance_embeds": instance_embeds, # 新增实例嵌入输出(实际上是用于掩码预测的特征图)
+            "obj_queries": obj_queries[-1], # 新增对象查询输出
         }
