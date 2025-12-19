@@ -7,8 +7,6 @@ def add_sam3_config(cfg):
     """
     cfg = cfg
     
-
-    
     cfg.MODEL.SAM3 = CN()
     # 对应 build_sam3_image_model 中的参数
     cfg.MODEL.SAM3.MODEL_TYPE = "sam3_image" # 预留，也许有 sam3_video
@@ -26,7 +24,8 @@ def add_sam3_config(cfg):
 
     cfg.INPUT.DATASET_MAPPER_NAME = "mask_former_semantic"
     cfg.INPUT.IMAGE_SIZE = 1008
-    
+    cfg.INPUT.COLOR_AUG_SSD = False    
+    cfg.INPUT.SIZE_DIVISIBILITY = -1
 
 
     cfg.MODEL.PIXEL_MEAN = [127.5, 127.5, 127.5]

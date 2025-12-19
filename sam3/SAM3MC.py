@@ -95,6 +95,7 @@ class SAM3MC(nn.Module):
         self.test_dataname = None
         self.test_metadata = {i: MetadataCatalog.get(i) for i in cfg.DATASETS.TEST}
         self.train_metadata = MetadataCatalog.get(cfg.DATASETS.TRAIN[0])
+        _, self.train_num_templates, self.train_class_names = self.prepare_class_names_from_metadata(self.train_metadata, self.train_metadata)
 
         # --------------------------------------------------
         # sam3的其他配置
@@ -108,6 +109,22 @@ class SAM3MC(nn.Module):
             input_points=None,
             input_points_mask=None,
         )
+        self._freeze()
+
+    def _freeze(self, ):
+        for name, param in self.named_parameters():
+            if 'backbone' in name:
+                param.requires_grad = False
+            if 'dot_prod_scoring' in name:
+                param.requires_grad = False
+            if 'geometry_encoder' in name:
+                param.requires_grad = False
+        
+        print('='*10,'Parameters to be trained', '='*10)
+        for name, param in self.named_parameters():
+            if param.requires_grad == True:
+                print(name)
+        # exit()
 
     def prepare_class_names_from_metadata(self, metadata, train_metadata):
         def split_labels(x):
@@ -160,17 +177,34 @@ class SAM3MC(nn.Module):
         if self.training:
             if self.train_dataname != dataname:
                 text_classifier = []
+                language_mask = []
                 # this is needed to avoid oom, which may happen when num of class is large
                 bs = 128
+                print("Generating text classifier for", dataname, "with", len(self.train_class_names), "classes.")
                 for idx in range(0, len(self.train_class_names), bs):
-                    text_classifier.append(self.detector.backbone.forward_text(self.train_class_names[idx:idx+bs], device=self.device).detach())
-                text_classifier = torch.cat(text_classifier, dim=0)
+                    state_text = self.detector.backbone.forward_text(self.train_class_names[idx:idx+bs], device=self.device)
 
+                    batch_text_feat = state_text["language_features"].detach()
+                    mask = state_text["language_mask"] # bs, L
+                    batch_text_feat = batch_text_feat.permute(1,0,2) # -> bs, L, D 
+                    text_classifier.append(batch_text_feat)
+                    language_mask.append(mask) # bs, L
+                text_classifier = torch.cat(text_classifier, dim=0)
+                language_mask = torch.cat(language_mask, dim=0) # (num_names * VILD_PROMPT,  L)
                 # average across templates and normalization.
-                text_classifier /= text_classifier.norm(dim=-1, keepdim=True)
-                text_classifier = text_classifier.reshape(text_classifier.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), text_classifier.shape[-1]).mean(1)
-                text_classifier /= text_classifier.norm(dim=-1, keepdim=True)
-                self.train_text_classifier = text_classifier
+                text_classifier = text_classifier.reshape(text_classifier.shape[0]//len(VILD_PROMPT), len(VILD_PROMPT), text_classifier.shape[-2], text_classifier.shape[-1]) # num_names, VILD_PROMPT, L, D
+                text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
+
+                text_classifier[language_mask.view(text_classifier.shape[0],text_classifier.shape[1],text_classifier.shape[2])] = 0.0 # [num_names, VILD_PROMPT, L, D] 掩码掉 padding 部分
+                language_features = text_classifier.mean(1) # num_names, L, D
+                text_classifier = text_classifier.mean(-2) 
+                text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
+                text_classifier = text_classifier.mean(1)
+                text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
+                
+                self.language_features = language_features.detach() # num_names , L, D
+                self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                self.train_text_classifier = text_classifier.detach()
                 self.train_dataname = dataname
             return self.train_text_classifier, self.train_num_templates
         else:
@@ -202,9 +236,9 @@ class SAM3MC(nn.Module):
                 text_classifier = text_classifier.mean(1)
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 
-                self.language_features = language_features # num_names , L, D
+                self.language_features = language_features.detach() # num_names , L, D
                 self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
-                self.test_text_classifier = text_classifier 
+                self.test_text_classifier = text_classifier.detach()
                 self.test_dataname = dataname
             return self.test_text_classifier, self.test_num_templates
 
@@ -221,26 +255,29 @@ class SAM3MC(nn.Module):
         img_h, img_w = images.tensor.shape[-2:]
 
         bs = images.tensor.shape[0]
+
+        with torch.no_grad():
+
+            file_names = [x["file_name"] for x in batched_inputs]
+            file_names = [x.split('/')[-1].split('.')[0] for x in file_names]
+
+            meta = batched_inputs[0]["meta"]
+            
+            # 图形特征
+            backbone_out_vision = self.detector.backbone.forward_image(images.tensor)
+            img_feat = backbone_out_vision["vision_features"].detach() # bs, C, H', W'
+            backbone_fpn = backbone_out_vision["backbone_fpn"]
+            for k in range(len(backbone_fpn)):
+                backbone_fpn[k] = backbone_fpn[k].detach()
         
 
-        file_names = [x["file_name"] for x in batched_inputs]
-        file_names = [x.split('/')[-1].split('.')[0] for x in file_names]
+            # 语言特征
+            # text_classifier:[num_names, dim] 
+            # language_features:[num_names, num_templates, L, dim] language_mask:[num_names, num_templates, L]
+            text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
 
-        meta = batched_inputs[0]["meta"]
-        
-        # 图形特征
-        backbone_out_vision = self.detector.backbone.forward_image(images.tensor)
-        img_feat = backbone_out_vision["vision_features"] # bs, C, H', W'
-        backbone_fpn = backbone_out_vision["backbone_fpn"]
-    
-
-        # 语言特征
-        # text_classifier:[num_names, dim] 
-        # language_features:[num_names, num_templates, L, dim] language_mask:[num_names, num_templates, L]
-        text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
-
-        # others
-        geometric_prompt = self.detector._get_dummy_prompt()
+            # others
+            geometric_prompt = self.detector._get_dummy_prompt()
         
         batch_gt_names_idx = []
         for i in range(bs):
@@ -339,8 +376,8 @@ class SAM3MC(nn.Module):
                 hs=hs,
             )
         
-        if self.detector.training or self.detector.num_interactive_steps_val > 0:
-            self.detector._compute_matching(out, self.detector.back_convert(find_target))
+        # if self.detector.training or self.detector.num_interactive_steps_val > 0:
+        #     self.detector._compute_matching(out, self.detector.back_convert(find_target))
 
         #========================================
         outputs = out
@@ -351,22 +388,18 @@ class SAM3MC(nn.Module):
 
 
         out_masks = outputs["pred_masks"]
-        out_masks = interpolate(
-            out_masks,
-            (img_h, img_w),
-            mode="bilinear",
-            align_corners=False,
-        ).sigmoid()
+
+        out_masks = out_masks.sigmoid()
 
         # presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1) # 在多类别情况下认为失效
 
-        out_semseg = outputs["semantic_seg"]
-        out_semseg = F.interpolate(
-            out_semseg,
-            size=(img_h, img_w),
-            mode="bilinear",
-            align_corners=False,
-        ).sigmoid()
+        # out_semseg = outputs["semantic_seg"] # 原语义分割头输出，舍去
+        # out_semseg = F.interpolate(
+        #     out_semseg,
+        #     size=(img_h, img_w),
+        #     mode="bilinear",
+        #     align_corners=False,
+        # ).sigmoid()
 
 
         # print("out_masks shape:", out_masks.shape, "out_probs shape:", out_probs.shape, "out_semseg shape:", out_semseg.shape, "presence_score shape:", presence_score.shape)
@@ -397,16 +430,28 @@ class SAM3MC(nn.Module):
         queries_names_probs = queries_names_logits.sigmoid()
         queries_names_probs = queries_names_probs.squeeze(-1) # bs, C, N
 
+        # 训练时会启用DAC导致 N_prob > N_mask
+        N_mask = out_masks.shape[1] # 200
+        N_prob = queries_names_probs.shape[2] # 400 (因为 DAC)
 
-        queries_seg_result = torch.zeros((bs, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
+        if N_prob > N_mask:
+            # 丢弃后 200 个 (o2m)，它们只是为了辅助训练，
+            # 真正的预测结果都在前 200 个 (o2o) 里。
+            queries_names_probs = queries_names_probs[:, :, :N_mask]
+        print("queries_names_probs shape:", queries_names_probs.shape)
 
-        for n in range(queries_names_probs.shape[2]):
-            query_instance_result = torch.mul(
-                queries_masks[:, n, :, :].unsqueeze(1), # bs, 1, H, W
-                queries_names_probs[:, :, n].unsqueeze(-1).unsqueeze(-1) # bs, C, 1, 1
-            )
-            # print("query_instance_result shape:", query_instance_result.shape) [bs, C, H, W]
-            queries_seg_result = torch.max(queries_seg_result, query_instance_result)
+
+        # queries_seg_result = torch.zeros((bs, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
+        # for n in range(queries_names_probs.shape[2]):
+        #     query_instance_result = torch.mul(
+        #         queries_masks[:, n, :, :].unsqueeze(1), # bs, 1, H, W
+        #         queries_names_probs[:, :, n].unsqueeze(-1).unsqueeze(-1) # bs, C, 1, 1
+        #     )
+        #     # print("query_instance_result shape:", query_instance_result.shape) [bs, C, H, W]
+        #     queries_seg_result = torch.max(queries_seg_result, query_instance_result)
+        
+        # 使用 einsum 极速聚合，显存占用极低，代替上面循环
+        queries_seg_result = torch.einsum("bnhw, bcn -> bchw", queries_masks, queries_names_probs)
 
 
         # semantic_masks = torch.mul(out_semseg , presence_score.unsqueeze(-1)) 也用不了了
@@ -421,20 +466,12 @@ class SAM3MC(nn.Module):
         sem_seg_probs = sem_seg_logits.sigmoid()
         # print("sem_seg_probs shape:", sem_seg_probs.shape)
 
-
-        #整合两部分的结果
-        sem_seg_logits = F.interpolate(
-            sem_seg_probs,
-            size=(img_h, img_w),
-            mode="bilinear",
-            align_corners=False,
-        )
-
         # seg_logits = torch.max(queries_seg_result, sem_seg_logits) # [bs, num_names, H, W]
 
         
-        seg_logits = queries_seg_result # 目前先不用semantic head的结果
-        # seg_logits = sem_seg_logits
+        # seg_logits = queries_seg_result # 目前先不用semantic head的结果
+        # seg_logits = sem_seg_probs
+        seg_logits = torch.max(queries_seg_result, sem_seg_probs) # [bs, num_names, H, W]
 
         if USE_GT_NAMES_ONLY:
             for b in range(bs):
@@ -467,6 +504,7 @@ class SAM3MC(nn.Module):
                 orig_size[1],
             )
             results.append({"sem_seg": res})
+        # print("跑通！")
         return results
 
 
