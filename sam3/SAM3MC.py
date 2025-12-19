@@ -295,7 +295,6 @@ class SAM3MC(nn.Module):
 
         #=================================
         find_input = self.find_stage
-        
 
         with torch.profiler.record_function("SAM3Image._encode_prompt"):
             prompt, prompt_mask, backbone_out = self.detector._encode_prompt(
@@ -361,8 +360,6 @@ class SAM3MC(nn.Module):
 
         # presence_score = outputs["presence_logit_dec"].sigmoid().unsqueeze(1) # 在多类别情况下认为失效
 
-
-
         out_semseg = outputs["semantic_seg"]
         out_semseg = F.interpolate(
             out_semseg,
@@ -384,28 +381,31 @@ class SAM3MC(nn.Module):
 
         # queries_masks = torch.mul(out_masks,out_probs.unsqueeze(-1)) # 每个实例的mask乘以对应的概率得分 [bs, N, H, W]
 
-        queries_masks = out_masks # out_probs失效，直接用原始mask_logits
+        queries_masks = out_masks # out_probs是通过与池化prompt投影卷积实现的，多类别下失效，直接用原始mask_logits
 
         queries = outputs["obj_queries"] 
 
         text_classifier_mask = torch.zeros((C, bs), dtype=torch.bool, device=text_classifier.device)
-        scores = self.detector.dot_prod_scoring( # 这里把num names当作batch维度实现并行
+
+        scores = self.detector.dot_prod_scoring( # 这里把num names当作batch维度实现并行，算出每个query对所有类别的分数
             hs=queries.unsqueeze(0)/queries.norm(dim=-1, keepdim=True).unsqueeze(0), # 1, bs, N, D, 
             prompt=text_classifier.unsqueeze(0), # 1, C, D
             prompt_mask=text_classifier_mask.expand(-1, bs), # C, bs 
-        )
+        ) # [bs, C, N, 1]
 
-        # print("scores shape:", scores.shape) 
-        queries_names_logits = scores.permute(0, 2, 1, 3) # bs, N, C, 1
- 
+        queries_names_logits = scores
         queries_names_probs = queries_names_logits.sigmoid()
-        queries_names_probs = queries_names_probs.squeeze(-1) # bs, N, C
+        queries_names_probs = queries_names_probs.squeeze(-1) # bs, C, N
 
 
         queries_seg_result = torch.zeros((bs, C, H, W), dtype=out_masks.dtype, device=out_masks.device)
 
-        for n in range(queries_names_probs.shape[1]):
-            query_instance_result = (queries_names_probs[:, n, :].unsqueeze(-1).unsqueeze(-1) * queries_masks[:, n, :, :].unsqueeze(1)) # [bs, num_names, 1, 1] * [bs, 1, H, W] -> [bs, num_names, H, W]
+        for n in range(queries_names_probs.shape[2]):
+            query_instance_result = torch.mul(
+                queries_masks[:, n, :, :].unsqueeze(1), # bs, 1, H, W
+                queries_names_probs[:, :, n].unsqueeze(-1).unsqueeze(-1) # bs, C, 1, 1
+            )
+            # print("query_instance_result shape:", query_instance_result.shape) [bs, C, H, W]
             queries_seg_result = torch.max(queries_seg_result, query_instance_result)
 
 
@@ -432,8 +432,8 @@ class SAM3MC(nn.Module):
 
         # seg_logits = torch.max(queries_seg_result, sem_seg_logits) # [bs, num_names, H, W]
 
-        # 目前先不合并
-        seg_logits = queries_seg_result
+        
+        seg_logits = queries_seg_result # 目前先不用semantic head的结果
         # seg_logits = sem_seg_logits
 
         if USE_GT_NAMES_ONLY:
