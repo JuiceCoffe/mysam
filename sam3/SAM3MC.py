@@ -135,7 +135,7 @@ class SAM3MC(nn.Module):
         # 初始化常数，通常对背景类做一点特殊的初始化有助于收敛
         nn.init.normal_(self.no_object_embed.weight, mean=0, std=0.02)
         
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(100))
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(10))
 
         self.sem_seg_projector = PixelProjector(
             input_dim= 256,
