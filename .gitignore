@@ -1,6 +1,8 @@
 *.png
 output/
 datasets/
+*.pyc
+maft/modeling/pixel_decoder/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
