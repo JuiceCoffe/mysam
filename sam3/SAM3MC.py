@@ -381,7 +381,8 @@ class SAM3MC(nn.Module):
             # text_classifier:[num_names, dim] 
             # language_features:[num_names, num_templates, L, dim] language_mask:[num_names, num_templates, L]
             text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
-            text_classifier = torch.cat([text_classifier, self.no_object_embed.weight], dim=0) # 增加一个背景类
+            no_obj_normalized = torch.nn.functional.normalize(self.no_object_embed.weight, p=2, dim=-1)
+            text_classifier = torch.cat([text_classifier, no_obj_normalized], dim=0)# 增加一个背景类
 
             # others
             geometric_prompt = self.detector._get_dummy_prompt(bs)
@@ -619,7 +620,7 @@ class SAM3MC(nn.Module):
             #     gtcls_mask[batch_gt_names_idx[b],:,:] = False
             #     seg_logits[b][gtcls_mask] = 0.0
         
-        final_seg_logits = seg_logits
+        final_seg_logits = seg_logits[:, :-1, :, :]
         # print("final_seg_logits shape:", final_seg_logits.shape) # bs,num_classes+1, H, W
 
         pred_result = final_seg_logits[0].argmax(0)
