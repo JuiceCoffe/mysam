@@ -196,6 +196,10 @@ class SAM3MC(nn.Module):
         for name, param in self.named_parameters():
             if 'backbone' in name:
                 param.requires_grad = False
+            elif 'dot_prod_scoring' in name:
+                param.requires_grad = False
+            elif 'geometry_encoder' in name:
+                param.requires_grad = False
             else:
                 param.requires_grad = True
         
@@ -342,6 +346,12 @@ class SAM3MC(nn.Module):
         return self.pixel_mean.device
 
     def forward(self, batched_inputs):
+        # print('='*10,'Parameters to be trained', '='*10)
+        # for name, param in self.named_parameters():
+        #     if param.requires_grad == True:
+        #         print(name)
+        # exit()
+
 
         images = [x["image"].to(self.device) for x in batched_inputs]
         # print("shape of first image:", images[0].shape)
@@ -623,7 +633,7 @@ class SAM3MC(nn.Module):
         final_seg_logits = seg_logits[:, :-1, :, :]
         # print("final_seg_logits shape:", final_seg_logits.shape) # bs,num_classes+1, H, W
 
-        pred_result = final_seg_logits[0].argmax(0)
+        # pred_result = final_seg_logits[0].argmax(0)
         # visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_queries/{file_names[0]}_")
         # visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_seg/{file_names[0]}_")
 

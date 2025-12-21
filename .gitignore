@@ -3,6 +3,8 @@ output/
 datasets/
 *.pyc
 maft/modeling/pixel_decoder/
+out/
+detectron2/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -34,7 +34,7 @@ def add_sam3_config(cfg):
     cfg.SOLVER.WEIGHT_DECAY_EMBED = 0.0
     # optimizer
     cfg.SOLVER.OPTIMIZER = "ADAMW"
-    cfg.SOLVER.BACKBONE_MULTIPLIER = 0.1
+    cfg.SOLVER.BACKBONE_MULTIPLIER = 0.0
     cfg.SOLVER.NO_OBJECT_WEIGHT = 0.1
     cfg.SOLVER.CLASS_WEIGHT = 2.0
     cfg.SOLVER.MASK_WEIGHT = 5.0

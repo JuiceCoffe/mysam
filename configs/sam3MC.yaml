@@ -5,8 +5,8 @@ MODEL:
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True
-  # WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
-  WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
+  WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
+  # WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
 DATASETS:
   TRAIN: ("openvocab_coco_2017_train_stuff_sem_seg",)  #  openvocab_coco_2017_train_panoptic_with_sem_seg
   TEST: ('openvocab_ade20k_panoptic_val',) 
@@ -14,6 +14,7 @@ SOLVER:
   AMP:
     ENABLED: True
   IMS_PER_BATCH: 4
+  # IMS_PER_BATCH: 3
   BASE_LR: 0.00001
   LR_SCHEDULER_NAME: WarmupPolyLR
   MAX_ITER: 120000 # 295000 # 55000 
