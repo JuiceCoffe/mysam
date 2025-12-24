@@ -36,8 +36,8 @@ from sam3.model.data_misc import FindStage, interpolate
 from maft.utils.text_templetes import VILD_PROMPT
 # VILD_PROMPT = ["{}"]
 
-from .loss.matcher import HungarianMatcher
-from .loss.criterion import SetCriterion
+from maft.modeling.matcher import HungarianMatcher
+from maft.modeling.criterion import SetCriterion
 from maft.modeling.transformer_decoder.fcclip_transformer_decoder import MaskPooling, get_classification_logits
 
 class PixelProjector(nn.Module):
@@ -130,16 +130,12 @@ class SAM3MC(nn.Module):
         # 新增模块
         # -------------------------------------------------------
         self.mask_pooling = MaskPooling()
-
-        # 【新增】初始化 logit_bias
-        # 我们希望初始概率 p = 0.01
-        # Sigmoid(x) = 0.01  =>  x = log(0.01 / (1 - 0.01)) ≈ -4.595
-        prior_prob = 0.01
-        bias_value = -np.log((1 - prior_prob) / prior_prob)
-        self.logit_bias = nn.Parameter(torch.ones([]) * bias_value)
-
-        # 在 __init__ 中
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)) # 这是一个经验值
+        
+        self.no_object_embed = nn.Embedding(1, 256)
+        # 初始化常数，通常对背景类做一点特殊的初始化有助于收敛
+        nn.init.normal_(self.no_object_embed.weight, mean=0, std=0.02)
+        
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(10))
 
         self.sem_seg_projector = PixelProjector(
             input_dim= 256,
@@ -406,6 +402,8 @@ class SAM3MC(nn.Module):
             # text_classifier:[num_names, dim] 
             # language_features:[num_names, num_templates, L, dim] language_mask:[num_names, num_templates, L]
             text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
+            no_obj_normalized = torch.nn.functional.normalize(self.no_object_embed.weight, p=2, dim=-1)
+            text_classifier = torch.cat([text_classifier, no_obj_normalized], dim=0)# 增加一个背景类
 
             # others
             geometric_prompt = self.detector._get_dummy_prompt(bs)
@@ -530,17 +528,19 @@ class SAM3MC(nn.Module):
         
 
         bs, N, H, W = out_masks.shape
-        C_ = text_classifier.shape[0] # num_names 
+        C_ = text_classifier.shape[0] # num_names + 1 
 
         queries_masks = out_masks # out_probs是通过与池化prompt投影卷积实现的，多类别下失效，直接用原始mask_logits
 
         queries = outputs["obj_queries"] # 6, bs, N, D
+
+        text_classifier_mask = torch.zeros((C_, bs), dtype=torch.bool, device=text_classifier.device)
+
         
         use_aux = self.use_aux and self.training
         aux_outputs = []
 
         for i in range(6):
-            assert queries.shape[0] == 6
             if use_aux or i == 5 :
                 tp_queries = queries[i,:,:N,:].clone() # 避免DAC造成的tp_queries翻倍
                 tp_queries = F.normalize(tp_queries, dim=-1, p=2)
@@ -556,18 +556,17 @@ class SAM3MC(nn.Module):
                 #     prompt = text_classifier.unsqueeze(0).expand( bs, -1, -1).contiguous().view(1, bs * C_, -1), # 1, bs*(C+1), D
                 #     prompt_mask=text_classifier_mask.expand(-1, bs).view(-1, 1), # (C+1) * bs 
                 # ) 
-                # out_vocab_names_results = out_vocab_names_results.view(bs, C_, N).permute(0,2,1) # bs, N, C
+                # out_vocab_names_results = out_vocab_names_results.view(bs, C_, N).permute(0,2,1) # bs, N, C+1
 
-                logit_scale = torch.clamp(self.logit_scale.exp(), max=30.0)
-                out_vocab_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
-                out_vocab_names_results = logit_scale * out_vocab_names_results + self.logit_bias
-
+                out_vocab_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C+1
+                
                 out_vocab_cls_results= []
                 cur_idx = 0
                 for num_t in num_templates: 
                     out_vocab_cls_results.append(out_vocab_names_results[:,:, cur_idx: cur_idx + num_t].max(-1).values)
                     cur_idx += num_t
                 out_vocab_cls_results = torch.stack(out_vocab_cls_results, dim=-1) # bs, N, num_classes
+                out_vocab_cls_results = torch.cat([out_vocab_cls_results, out_vocab_names_results[:,:,-1:]], dim=-1) # bs, N, num_classes + 1 (添加背景类)
                 # print(f"aux out_vocab_cls_results[{i}] shape:", out_vocab_cls_results.shape)
                 if i<5:
                     aux_outputs.append({'pred_logits': out_vocab_cls_results, 'pred_masks': outputs['aux_outputs'][i]["pred_masks"]})
@@ -616,13 +615,11 @@ class SAM3MC(nn.Module):
             #     gtcls_mask[batch_gt_names_idx[b],:,:] = False
             #     seg_logits[b][gtcls_mask] = 0.0
         
-        # final_seg_logits = seg_logits[:, :-1, :, :]
-        final_seg_logits = seg_logits
+        final_seg_logits = seg_logits[:, :-1, :, :]
         # print("final_seg_logits shape:", final_seg_logits.shape) # bs,num_classes+1, H, W
 
         # pred_result = final_seg_logits[0].argmax(0)
-        # if not self.training:
-        #     visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_queries/{file_names[0]}_")
+        # visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_queries/{file_names[0]}_")
         # visualize_segmentation(pred_result, self.vis_class_names+['void'],batched_inputs[0]["image"],f"./show_seg/{file_names[0]}_")
 
         # =======================================================
