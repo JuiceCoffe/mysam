@@ -1,10 +1,9 @@
-try:
-    # ignore ShapelyDeprecationWarning from fvcore
-    from shapely.errors import ShapelyDeprecationWarning
-    import warnings
-    warnings.filterwarnings('ignore', category=ShapelyDeprecationWarning)
-except:
-    pass
+import warnings
+import os
+
+# 1. 禁用所有警告
+warnings.filterwarnings("ignore")
+
 
 import copy
 import itertools

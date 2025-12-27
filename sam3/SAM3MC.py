@@ -535,7 +535,8 @@ class SAM3MC(nn.Module):
         queries_masks = out_masks # out_probs是通过与池化prompt投影卷积实现的，多类别下失效，直接用原始mask_logits
 
         queries = outputs["obj_queries"] # 6, bs, N, D
-        
+        pixel_embed = outputs["pixel_embed"] # bs, D, H', W'
+
         use_aux = self.use_aux and self.training
         aux_outputs = []
 
@@ -545,34 +546,36 @@ class SAM3MC(nn.Module):
                 tp_queries = queries[i,:,:N,:].clone() # 避免DAC造成的tp_queries翻倍
                 tp_queries = F.normalize(tp_queries, dim=-1, p=2)
 
-                # hs=tp_queries.unsqueeze(1)
-                # hs = hs.expand(-1, C_, -1, -1).contiguous().view(bs*(C_), N, -1).unsqueeze(0) # 1, bs*(C+1), N, D
-                # print("hs shape:", hs.shape)
-                # prompt= text_classifier.unsqueeze(0).expand( bs, -1, -1).contiguous().view(1, bs * C_, -1) # 1, bs*(C+1), D
-                # print("prompt shape", prompt.shape)
-
-                # out_vocab_names_results = self.detector.dot_prod_scoring( # 这里把num names当作batch维度实现并行，算出每个query对所有类别的分数
+                # query_names_results = self.detector.dot_prod_scoring( # 这里把num names当作batch维度实现并行，算出每个query对所有类别的分数
                 #     hs= tp_queries.unsqueeze(1).expand(-1, C_, -1, -1).contiguous().view(bs*(C_), N, -1).unsqueeze(0), # 1, bs*(C+1), N, D
                 #     prompt = text_classifier.unsqueeze(0).expand( bs, -1, -1).contiguous().view(1, bs * C_, -1), # 1, bs*(C+1), D
                 #     prompt_mask=text_classifier_mask.expand(-1, bs).view(-1, 1), # (C+1) * bs 
                 # ) 
-                # out_vocab_names_results = out_vocab_names_results.view(bs, C_, N).permute(0,2,1) # bs, N, C
+                # query_names_results = query_names_results.view(bs, C_, N).permute(0,2,1) # bs, N, C
 
                 logit_scale = torch.clamp(self.logit_scale.exp(), max=30.0)
-                out_vocab_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
-                out_vocab_names_results = logit_scale * out_vocab_names_results + self.logit_bias
+                query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
+                query_names_results = logit_scale * query_names_results + self.logit_bias
 
-                out_vocab_cls_results= []
+                query_cls_results= []
                 cur_idx = 0
                 for num_t in num_templates: 
-                    out_vocab_cls_results.append(out_vocab_names_results[:,:, cur_idx: cur_idx + num_t].max(-1).values)
+                    query_cls_results.append(query_names_results[:,:, cur_idx: cur_idx + num_t].max(-1).values)
                     cur_idx += num_t
-                out_vocab_cls_results = torch.stack(out_vocab_cls_results, dim=-1) # bs, N, num_classes
-                # print(f"aux out_vocab_cls_results[{i}] shape:", out_vocab_cls_results.shape)
-                if i<5:
-                    aux_outputs.append({'pred_logits': out_vocab_cls_results, 'pred_masks': outputs['aux_outputs'][i]["pred_masks"]})
+                query_cls_results = torch.stack(query_cls_results, dim=-1) # bs, N, num_classes
+                # print(f"aux query_cls_results[{i}] shape:", query_cls_results.shape)
+
+                # 用点积结果代替原有掩码生成逻辑
+                tp_masks_logits = torch.einsum("bnd,bdhw->bnhw", tp_queries, pixel_embed) # bs, N, D @ bs, D, H', W' -> bs, N, H', W'
+                if i<5:    
+                    outputs['aux_outputs'][i]["pred_masks"] = tp_masks_logits
                 else:
-                    out_vocab_cls_results_final = out_vocab_cls_results
+                    outputs["pred_masks"] = tp_masks_logits
+
+                if i<5:
+                    aux_outputs.append({'pred_logits': query_cls_results, 'pred_masks': outputs['aux_outputs'][i]["pred_masks"]})
+                else:
+                    query_cls_results_final = query_cls_results
 
 
 
@@ -585,7 +588,7 @@ class SAM3MC(nn.Module):
                 targets = None
             
             criterion_pred = {
-                'pred_logits': out_vocab_cls_results_final,
+                'pred_logits': query_cls_results_final,
                 'pred_masks': outputs["pred_masks"],
                 'aux_outputs': aux_outputs if use_aux is True else None,
             }
@@ -603,8 +606,8 @@ class SAM3MC(nn.Module):
             return losses
             
         else:
-            out_vocab_cls_results = out_vocab_cls_results.sigmoid() 
-            queries_seg_result = torch.einsum("bnc,bnhw->bchw", out_vocab_cls_results, queries_masks) # [bs, num_classes+1, H, W]
+            query_cls_results = query_cls_results.sigmoid() 
+            queries_seg_result = torch.einsum("bnc,bnhw->bchw", query_cls_results, queries_masks) # [bs, num_classes+1, H, W]
 
 
         seg_logits = queries_seg_result 
