@@ -5,7 +5,7 @@ MODEL:
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True
-  WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
+  WEIGHTS: "/data/hmp/TASK/OVS/mysam/out/objects365/bs8_1e-4_1ep/model_0024999.pth" 
   # WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
   # WEIGHTS: /data/hmp/sam3.pt
 DATASETS:
@@ -14,11 +14,11 @@ DATASETS:
 SOLVER:
   AMP:
     ENABLED: True
-  IMS_PER_BATCH: 6
+  IMS_PER_BATCH: 8
   # IMS_PER_BATCH: 3
   BASE_LR: 0.0001
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 100000 # 295000 # 55000 
+  MAX_ITER: 75000 # 295000 # 55000 
   CHECKPOINT_PERIOD: 12500
 
   CLASS_WEIGHT: 2.0
@@ -58,7 +58,7 @@ INPUT:
   FORMAT: "RGB"
 
 # OUTPUT_DIR: ./out/objects365/bs8_1e-4_1ep
-OUTPUT_DIR: ./out/objects365/bs6_1e-4_1ep
+OUTPUT_DIR: ./out/objects365/ev_bs8_1e-4_1ep
   
 DATALOADER:
   # 必须开启！过滤掉没有标注的图片

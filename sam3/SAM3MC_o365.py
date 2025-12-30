@@ -169,7 +169,7 @@ class SAM3MC_o365(nn.Module):
         self.panoptic_on = cfg.TEST.PANOPTIC_ON if hasattr(cfg.TEST, "PANOPTIC_ON") else False
         
         # 阈值设置 (如果没有在 cfg 定义，给默认值)
-        self.object_mask_threshold = 0.0
+        self.object_mask_threshold = 0.01
         self.overlap_threshold = 0.8
         self.test_topk_per_image = 100
 
@@ -195,67 +195,19 @@ class SAM3MC_o365(nn.Module):
     def prepare_targets(self, targets, images):
         h_pad, w_pad = images.tensor.shape[-2:]
         new_targets = []
-        masks_list = []
-        labels_list = []
-
-        num_masks = 32  # 每张图片最多选取 24 个掩码
-        min_mask_area = 0
-        
         for targets_per_image in targets:
-            # 获取原始掩码并进行 padding
+            # pad gt
             gt_masks = targets_per_image.gt_masks
             if isinstance(gt_masks, BitMasks):
                 gt_masks = gt_masks.tensor
-            valid_mask_indices = [i for i, mask in enumerate(gt_masks) if mask.sum() > min_mask_area]  # 筛选掉面积小于阈值的掩码
-
-            if len(valid_mask_indices) > 0:
-                valid_gt_masks = gt_masks[valid_mask_indices]
-                valid_gt_classes = targets_per_image.gt_classes[valid_mask_indices]
-                
-                padded_masks = torch.zeros((valid_gt_masks.shape[0], h_pad, w_pad), dtype=valid_gt_masks.dtype, device=valid_gt_masks.device)
-                padded_masks[:, : valid_gt_masks.shape[1], : valid_gt_masks.shape[2]] = valid_gt_masks
-                new_targets.append(
-                    {
-                        "labels": valid_gt_classes,
-                        "masks": padded_masks,
-                    }
-                )
-
-                # 初始化 total_masks 和 selected_labels
-                total_masks = torch.zeros((num_masks, h_pad, w_pad), dtype=gt_masks.dtype, device=gt_masks.device)
-                selected_labels = torch.zeros((num_masks), device=gt_masks.device)
-
-                if valid_gt_masks.shape[0] != 0:
-                    # 随机选取有效的掩码
-                    selected_indices = random.choices(range(valid_gt_masks.shape[0]), k=num_masks)
-
-                    for idx, mask_idx in enumerate(selected_indices):
-                        total_masks[idx, :valid_gt_masks[mask_idx].shape[0], :valid_gt_masks[mask_idx].shape[1]] = valid_gt_masks[mask_idx]
-                        selected_labels[idx] = valid_gt_classes[mask_idx]
-                else:
-                    selected_labels.fill_(-1)  # 若没有有效掩码，则填充255表示无效
-            else:
-                total_masks = torch.zeros((num_masks, h_pad, w_pad), dtype=gt_masks.dtype, device=gt_masks.device)
-                selected_labels = torch.zeros((num_masks), device=gt_masks.device)
-                selected_labels.fill_(-1)  # 若所有掩码全为0，则标记为无效
-                
-                padded_masks = torch.zeros((0, h_pad, w_pad), dtype=gt_masks.dtype, device=gt_masks.device)
-                valid_gt_classes = torch.zeros((0), device=gt_masks.device)
-                new_targets.append(
-                    {
-                        "labels": valid_gt_classes,
-                        "masks": padded_masks,
-                    }
-                )
-
-            masks_list.append(total_masks)
-            labels_list.append(selected_labels)
-
-        masks = torch.stack(masks_list, dim=0)
-        labels = torch.stack(labels_list, dim=0)
-        labels = labels.long()
-
-        # return new_targets, masks, labels
+            padded_masks = torch.zeros((gt_masks.shape[0], h_pad, w_pad), dtype=gt_masks.dtype, device=gt_masks.device)
+            padded_masks[:, : gt_masks.shape[1], : gt_masks.shape[2]] = gt_masks
+            new_targets.append(
+                {
+                    "labels": targets_per_image.gt_classes,
+                    "masks": padded_masks,
+                }
+            )
         return new_targets
 
     def prepare_class_names_from_metadata(self, metadata, train_metadata):
@@ -581,13 +533,6 @@ class SAM3MC_o365(nn.Module):
                 tp_queries = queries[i,:,:N,:].clone() # 避免DAC造成的tp_queries翻倍
                 tp_queries = F.normalize(tp_queries, dim=-1, p=2)
 
-                # query_names_results = self.detector.dot_prod_scoring( # 这里把num names当作batch维度实现并行，算出每个query对所有类别的分数
-                #     hs= tp_queries.unsqueeze(1).expand(-1, C_, -1, -1).contiguous().view(bs*(C_), N, -1).unsqueeze(0), # 1, bs*(C+1), N, D
-                #     prompt = text_classifier.unsqueeze(0).expand( bs, -1, -1).contiguous().view(1, bs * C_, -1), # 1, bs*(C+1), D
-                #     prompt_mask=text_classifier_mask.expand(-1, bs).view(-1, 1), # (C+1) * bs 
-                # ) 
-                # query_names_results = query_names_results.view(bs, C_, N).permute(0,2,1) # bs, N, C
-
                 logit_scale = torch.clamp(self.logit_scale.exp(), max=30.0)
                 query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
                 query_names_results = logit_scale * query_names_results + self.logit_bias
@@ -599,13 +544,6 @@ class SAM3MC_o365(nn.Module):
                     cur_idx += num_t
                 query_cls_results = torch.stack(query_cls_results, dim=-1) # bs, N, num_classes
                 # print(f"aux query_cls_results[{i}] shape:", query_cls_results.shape)
-
-                # # 用点积结果代替原有掩码生成逻辑 疑似效果极差
-                # tp_masks_logits = torch.einsum("bnd,bdhw->bnhw", tp_queries, instance_embeds) # bs, N, D @ bs, D, H', W' -> bs, N, H', W'
-                # if i<5:    
-                #     outputs['aux_outputs'][i]["pred_masks"] = tp_masks_logits
-                # else:
-                #     outputs["pred_masks"] = tp_masks_logits
                     
 
                 if i<5:
@@ -643,16 +581,6 @@ class SAM3MC_o365(nn.Module):
         
         else:
 
-        #     pred_result = final_seg_logits[0].argmax(0)
-        #     visualize_segmentation(
-        #         pred_result=pred_result,
-        #         gt_result=batched_inputs[0]["sem_seg"].to(self.device),
-        #         class_names=self.vis_class_names + ['background'], # 确保对应 index
-        #         original_image_tensor=batched_inputs[0]["image"],
-        #         save_path=f"./show_queries_test/{file_names[0]}"
-        #     )
-
-
         # =======================================================
         
             mask_cls_logits = query_cls_results_final # 保持 Logits 状态
@@ -678,7 +606,23 @@ class SAM3MC_o365(nn.Module):
                     mode="bilinear", 
                     align_corners=False
                 ).squeeze(0)
+
+
+                # # =======================================================
+                # # 【新】整洁的可视化调用
+                # # =======================================================
+                # # 2. 生成实例分割结果 (Instances对象)
+                # inst_res = self.instance_inference(
+                #     mask_cls_logits[i], mask_pred_i, dataname
+                # )
                 
+                # self.save_visualization_debug(
+                #     batched_inputs[i], 
+                #     inst_res, 
+                #     save_dir="./debug_vis_o365"
+                # )
+                # # =======================================================
+
                 res = {}
                 dataname = batched_inputs[i]["meta"]["dataname"]
 
@@ -689,6 +633,36 @@ class SAM3MC_o365(nn.Module):
                     mask_pred_prob = mask_pred_i.sigmoid()
                     semseg = torch.einsum("qc,qhw->chw", mask_cls_prob, mask_pred_prob)
                     res["sem_seg"] = semseg
+
+                    # # =========== 修改开始 ===========
+                    # # 1. 动态获取当前数据集的元数据
+                    # current_dataname = batched_inputs[i]["meta"]["dataname"]
+                    # if current_dataname in self.test_metadata:
+                    #     meta = self.test_metadata[current_dataname]
+                    # else:
+                    #     meta = MetadataCatalog.get(current_dataname)
+                    
+                    # # 2. 获取正确的类别名称列表
+                    # try:
+                    #     # ADE20K / COCO Panoptic 通常在 stuff_classes 里
+                    #     current_class_names = meta.stuff_classes
+                    # except:
+                    #     # Objects365 / LVIS 在 thing_classes 里
+                    #     current_class_names = meta.thing_classes
+                    
+                    # # 3. 只有在需要可视化时才运行绘图 (建议加个概率，不然太慢)
+                    # if random.random() < 0.1: # 抽样 10% 进行可视化
+                    #     pred_result = semseg.argmax(0).cpu()
+                        
+                    #     # 4. 传入正确的 current_class_names
+                    #     visualize_segmentation(
+                    #         pred_result=pred_result,
+                    #         gt_result=batched_inputs[i]["sem_seg"].to(self.device), # 注意索引改为了 i
+                    #         class_names=current_class_names + ['background'],     # 修正这里！
+                    #         original_image_tensor=batched_inputs[i]["image"],     # 注意索引改为了 i
+                    #         save_path=f"./show_queries_test/{batched_inputs[i]['file_name'].split('/')[-1].split('.')[0]}.png"
+                    #     )
+                    # # =========== 修改结束 ===========
 
                 # --- B. 全景分割 (Panoptic Segmentation) ---
                 if self.panoptic_on:
@@ -818,15 +792,161 @@ class SAM3MC_o365(nn.Module):
         
         # 使用 Sigmoid 后的 Mask
         mask_pred_sigmoid = mask_pred.sigmoid()
-        result.pred_masks = (mask_pred_sigmoid > 0.5).float() # 二值化
+        pred_masks_binary = (mask_pred_sigmoid > 0.5).float()
+        result.pred_masks = pred_masks_binary
         result.pred_boxes = Boxes(torch.zeros(mask_pred.size(0), 4)) # SAM3 通常不直接出框，这里放空框或者用 mask2box 计算
         
         # 计算综合分数
         mask_scores_per_image = (mask_pred_sigmoid.flatten(1) * result.pred_masks.flatten(1)).sum(1) / (result.pred_masks.flatten(1).sum(1) + 1e-6)
         result.scores = scores_per_image * mask_scores_per_image
         result.pred_classes = labels_per_image
-        
+
+        if pred_masks_binary.numel() > 0:
+            # BitMasks 最好接收 Bool 或 Uint8
+            # result.pred_masks 是 float，这里转一下 ensure 安全
+            result.pred_boxes = BitMasks(pred_masks_binary > 0).get_bounding_boxes()
+        else:
+            result.pred_boxes = Boxes(torch.zeros(0, 4, device=self.device))
+            
         return result
+
+    @torch.no_grad()
+    def save_visualization_debug(self, batched_input, pred_instances, save_dir="./debug_vis"):
+        """
+        封装好的可视化步骤：确保所有张量在同一设备（CPU）上进行计算
+        """
+        import os
+        
+        # 1. 准备原图
+        # 既然之前的经验证明它是 0-255，我们直接转换即可，不需要 * std + mean
+        img_tensor = batched_input["image"].detach().clone().to("cpu")
+        
+        # 直接转为 numpy [H, W, 3] uint8
+        # 注意：这里假设输入是 RGB 格式 (0-255)
+        img_np = img_tensor.permute(1, 2, 0).numpy().clip(0, 255).astype("uint8")
+
+        # 4. 准备 GT (如果存在) 并移到 CPU
+        gt_instances = None
+        if "instances" in batched_input:
+            gt_instances = batched_input["instances"].to("cpu")
+
+        # 5. 获取 Metadata
+        dataname = batched_input["meta"]["dataname"]
+        if hasattr(self, "test_metadata") and dataname in self.test_metadata:
+            meta = self.test_metadata[dataname]
+        else:
+            meta = MetadataCatalog.get(dataname)
+
+        # 6. 构建保存路径
+        file_name = batched_input["file_name"].split('/')[-1]
+        file_name = os.path.splitext(file_name)[0] + ".jpg"
+        os.makedirs(save_dir, exist_ok=True)
+        full_path = os.path.join(save_dir, file_name)
+
+        # 7. 调用底层绘图逻辑 (pred_instances 也要移到 CPU)
+        self._plot_side_by_side(
+            img_np, 
+            pred_instances.to("cpu"), 
+            gt_instances, 
+            meta, 
+            full_path
+        )
+
+    @staticmethod
+    def _plot_side_by_side(img_np, pred_instances, gt_instances, metadata, save_path):
+        """
+        底层静态绘图函数：增加了对齐 Mask 和 Image 尺寸的逻辑
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+        import torch.nn.functional as F
+        
+        h, w = img_np.shape[:2] # 这里的 h, w 是 1008
+        ignore_index = 255
+
+        def instances_to_map(instances):
+            canvas = np.full((h, w), ignore_index, dtype=np.int64)
+            if instances is None or len(instances) == 0:
+                return canvas
+            
+            if instances.has("pred_masks"):
+                masks = instances.pred_masks # [N, H_mask, W_mask]
+                classes = instances.pred_classes
+            else: # GT
+                masks = instances.gt_masks.tensor if hasattr(instances.gt_masks, "tensor") else instances.gt_masks.rasterize((h,w)).tensor
+                classes = instances.gt_classes
+            
+            # --- 核心修复：确保 masks 的尺寸与 canvas (h, w) 完全一致 ---
+            if masks.shape[-2:] != (h, w):
+                # 将 masks 临时转为 float 进行插值，对齐到 1008x1008
+                masks = F.interpolate(
+                    masks.unsqueeze(0).float(), 
+                    size=(h, w), 
+                    mode="bilinear", 
+                    align_corners=False
+                ).squeeze(0)
+            
+            # 按面积降序排列
+            areas = masks.sum(dim=(1, 2))
+            sorted_idxs = torch.argsort(areas, descending=True)
+
+            masks = masks.cpu().numpy()
+            classes = classes.cpu().numpy()
+
+            for i in sorted_idxs:
+                m = masks[i] > 0.5 # 二值化
+                canvas[m] = classes[i]
+            return canvas
+
+        # 下面逻辑保持不变...
+        pred_map = instances_to_map(pred_instances)
+        gt_map = instances_to_map(gt_instances)
+
+        # 获取颜色和类别名
+        try:
+            class_names = metadata.thing_classes
+        except:
+            class_names = metadata.stuff_classes
+        
+        num_classes = len(class_names)
+        np.random.seed(42)
+        palette = np.random.randint(0, 255, size=(num_classes + 1, 3))
+
+        def map_to_rgb(idx_map):
+            out = np.zeros((h, w, 3), dtype=np.uint8)
+            unique_ids = np.unique(idx_map)
+            for uid in unique_ids:
+                if uid == ignore_index:
+                    out[idx_map == uid] = [40, 40, 40] # 深灰背景
+                elif uid < num_classes:
+                    out[idx_map == uid] = palette[uid]
+            return out
+
+        pred_rgb = map_to_rgb(pred_map)
+        gt_rgb = map_to_rgb(gt_map)
+
+        fig, ax = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+        ax[0].imshow(img_np)
+        ax[0].set_title("Input Image (Cropped)")
+        ax[0].axis("off")
+        ax[1].imshow(pred_rgb)
+        ax[1].set_title("Pred")
+        ax[1].axis("off")
+        ax[2].imshow(gt_rgb)
+        ax[2].set_title("GT")
+        ax[2].axis("off")
+
+        present_ids = np.unique(np.concatenate([pred_map.flatten(), gt_map.flatten()]))
+        handles = []
+        for uid in present_ids:
+            if uid != ignore_index and uid < num_classes:
+                handles.append(Rectangle((0,0),1,1, color=palette[uid]/255.0, label=f"{class_names[uid]}"))
+        
+        if handles:
+            fig.legend(handles=handles, loc='lower center', ncol=min(8, len(handles)), fontsize=8)
+
+        plt.savefig(save_path, dpi=100)
+        plt.close(fig)
 
 def get_gt_labels_from_sem_seg(sem_seg):
     """
