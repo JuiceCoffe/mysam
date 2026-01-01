@@ -30,7 +30,7 @@ SOLVER:
 
 TEST:
   EVAL_PERIOD: 2500
-  INSTANCE_ON: False   # 测 AP (Objects365 的主要指标)
+  INSTANCE_ON: True   # 测 AP (Objects365 的主要指标)
   PANOPTIC_ON: True   # 测 PQ
   SEMANTIC_ON: True   # 测 mIoU
 
