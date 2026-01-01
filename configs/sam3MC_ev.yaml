@@ -1,8 +1,0 @@
-_BASE_: ./sam3MC.yaml
-MODEL:
-  # WEIGHTS: /root/hmp/mysam/out/semantic/sam3MC/bs4_1008_1e-5_120k/model_0001999.pth
-  META_ARCHITECTURE: "SAM3MC_DINO"
-  WEIGHTS: /data/hmp/mysam/weights/model_0014999.pth
-
-
-OUTPUT_DIR: ./out/semantic/sam3MC/eval

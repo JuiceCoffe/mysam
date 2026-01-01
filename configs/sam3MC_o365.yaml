@@ -5,21 +5,23 @@ MODEL:
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True
-  WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
+  # WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
   # WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
-  # WEIGHTS: /data/hmp/sam3.pt
+  WEIGHTS: /data/hmp/sam3.pt
+  # WEIGHTS: weights/obj1e5_model_0024999.pth
 DATASETS:
-  TRAIN: ("objects365_v1_masktrain",) #"lvis_v1_train","openvocab_coco_2017_train_panoptic_with_sem_seg")
+  # TRAIN: ("objects365_v1_masktrain",) 
+  TRAIN: ("coco_2017_train_panoptic",)
   TEST: ('openvocab_ade20k_panoptic_val',) 
 SOLVER:
   AMP:
     ENABLED: True
-  IMS_PER_BATCH: 4
+  IMS_PER_BATCH: 8
   # IMS_PER_BATCH: 3
-  BASE_LR: 0.00001
+  BASE_LR: 0.00002
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 150000 # 295000 # 55000 
-  CHECKPOINT_PERIOD: 25000
+  MAX_ITER: 7500 # 295000 # 55000 
+  CHECKPOINT_PERIOD: 2500
 
   CLASS_WEIGHT: 2.0
   MASK_WEIGHT: 5.0
@@ -27,43 +29,20 @@ SOLVER:
   USE_AUX : True
 
 TEST:
-  EVAL_PERIOD: 25000
-  INSTANCE_ON: True   # 测 AP (Objects365 的主要指标)
+  EVAL_PERIOD: 2500
+  INSTANCE_ON: False   # 测 AP (Objects365 的主要指标)
   PANOPTIC_ON: True   # 测 PQ
   SEMANTIC_ON: True   # 测 mIoU
-  DETECTIONS_PER_IMAGE: 100 # 实例分割每张图保留多少个结果
 
 INPUT:
-  # DATASET_MAPPER_NAME: "mask_former_semantic" 
   DATASET_MAPPER_NAME: "coco_combine_lsj"
+  # 这个参数控制 ResizeScale 的目标尺寸和 FixedSizeCrop 的裁剪尺寸
   IMAGE_SIZE: 1008
-  # 1. 禁用缩放抖动：将最小和最大缩放比例都设为 1.0
+  # 控制 ResizeScale 的缩放比例
   MIN_SCALE: 1.0
   MAX_SCALE: 1.0
-  
-  # 2. 锁定尺寸：让最短边和最长边都限制在 1008
-  MIN_SIZE_TRAIN: (1008,)
-  MAX_SIZE_TRAIN: 1008
-  MIN_SIZE_TEST: 1008
-  MAX_SIZE_TEST: 1008
-  
-  # 3. 保持 Crop 开启：确保输出一定是 1008x1008 的正方形
-  CROP:
-    ENABLED: True
-    TYPE: "absolute"
-    SIZE: (1008, 1008)
-    SINGLE_CATEGORY_MAX_AREA: 1.0
-    
-  MASK_FORMAT: "bitmask"
+  # 图片读取格式
   FORMAT: "RGB"
 
-# OUTPUT_DIR: ./out/objects365/bs8_1e-4_1ep
-OUTPUT_DIR: ./out/objects365/bs4_1e-5_1ep
+OUTPUT_DIR: ./out/instance/bs16_2e-5_obj1e5_coco1ep
   
-DATALOADER:
-  # 必须开启！过滤掉没有标注的图片
-  FILTER_EMPTY_ANNOTATIONS: True
-  # 开启长宽比分组，减少 padding 浪费，节省显存
-  ASPECT_RATIO_GROUPING: True
-  # Objects365 图片解码较慢，建议增加 workers
-  NUM_WORKERS: 0

@@ -58,7 +58,7 @@ from maft.data.dataset_mappers.coco_combine_new_baseline_dataset_mapper import C
 
 from sam3.config import add_sam3_config
 from sam3.modeling_d2 import SAM3Wrapper # 导入这个类就会自动触发 REGISTER
-from sam3.SAM3MC import SAM3MC
+# from sam3.SAM3MC import SAM3MC
 from sam3.SAM3MC_ora import SAM3MC_ora
 from sam3.SAM3MC_DINO import SAM3MC_DINO
 from sam3.SAM3MC_o365 import SAM3MC_o365
@@ -71,19 +71,32 @@ class Trainer(DefaultTrainer):
 
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
-        """
-        Create evaluator(s) for a given dataset.
-        This uses the special metadata "evaluator_type" associated with each
-        builtin dataset. For your own dataset, you can simply create an
-        evaluator manually in your script and do not have to worry about the
-        hacky if-else logic here.
-        """
         if output_folder is None:
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
+        
         evaluator_list = []
-        evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
-        # semantic segmentation
-        if cfg.INPUT.DATASET_MAPPER_NAME == "mask_former_semantic":
+        
+        # ---------------------------------------------------------
+        # 1. 实例分割 (Instance Segmentation) -> 对应 INSTANCE_ON
+        #    通常用于计算 AP (Average Precision)
+        # ---------------------------------------------------------
+        if cfg.TEST.INSTANCE_ON:
+            evaluator_list.append(InstanceSegEvaluator(dataset_name, output_dir=output_folder))
+
+        # ---------------------------------------------------------
+        # 2. 全景分割 (Panoptic Segmentation) -> 对应 PANOPTIC_ON
+        #    通常用于计算 PQ (Panoptic Quality)
+        # ---------------------------------------------------------
+        if cfg.TEST.PANOPTIC_ON:
+            evaluator_list.append(
+                COCOPanopticEvaluator(dataset_name, output_dir=output_folder)
+            )
+
+        # ---------------------------------------------------------
+        # 3. 语义分割 (Semantic Segmentation) -> 对应 SEMANTIC_ON
+        #    通常用于计算 mIoU
+        # ---------------------------------------------------------
+        if cfg.TEST.SEMANTIC_ON:
             evaluator_list.append(
                 SemSegEvaluator(
                     dataset_name,
@@ -91,26 +104,18 @@ class Trainer(DefaultTrainer):
                     output_dir=output_folder,
                 )
             )
-        # panoptic segmentation
-        elif cfg.INPUT.DATASET_MAPPER_NAME == "coco_panoptic_lsj":
-            evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_dir=output_folder))
-        elif cfg.INPUT.DATASET_MAPPER_NAME == "coco_combine_lsj":
-            evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_dir=output_folder))
-            evaluator_list.append(
-                SemSegEvaluator(
-                    dataset_name,
-                    distributed=True,
-                    output_dir=output_folder,
-                )
-            )
+
+        # ---------------------------------------------------------
+        # 异常处理与返回
+        # ---------------------------------------------------------
         if len(evaluator_list) == 0:
             raise NotImplementedError(
-                "no Evaluator for the dataset {} with the type {}".format(
-                    dataset_name, evaluator_type
-                )
+                "No Evaluator generated. Please check your cfg.TEST.*_ON settings "
+                "or the dataset evaluator_type."
             )
         elif len(evaluator_list) == 1:
             return evaluator_list[0]
+        
         return DatasetEvaluators(evaluator_list)
 
 

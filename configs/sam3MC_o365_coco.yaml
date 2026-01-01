@@ -1,25 +1,26 @@
 MODEL:
   PIXEL_MEAN : [127.5, 127.5, 127.5]
   PIXEL_STD : [127.5, 127.5, 127.5]
-  META_ARCHITECTURE: "SAM3MC"
+  META_ARCHITECTURE: "SAM3MC_o365"
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True
   # WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
   # WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
   WEIGHTS: /data/hmp/sam3.pt
+  # WEIGHTS: weights/obj1e5_model_0024999.pth
 DATASETS:
-  TRAIN: ("openvocab_coco_2017_train_stuff_sem_seg",)  #  openvocab_coco_2017_train_panoptic_with_sem_seg
+  TRAIN: ("openvocab_coco_2017_train_stuff_sem_seg",)  
   TEST: ('openvocab_ade20k_panoptic_val',) 
 SOLVER:
   AMP:
     ENABLED: True
   IMS_PER_BATCH: 8
   # IMS_PER_BATCH: 3
-  BASE_LR: 0.0001
+  BASE_LR: 0.00002
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 60000 # 295000 # 55000 
-  CHECKPOINT_PERIOD: 15000
+  MAX_ITER: 7500 # 295000 # 55000 
+  CHECKPOINT_PERIOD: 2500
 
   CLASS_WEIGHT: 2.0
   MASK_WEIGHT: 5.0
@@ -27,7 +28,10 @@ SOLVER:
   USE_AUX : True
 
 TEST:
-  EVAL_PERIOD: 15000
+  EVAL_PERIOD: 2500
+  INSTANCE_ON: False   # 测 AP (Objects365 的主要指标)
+  PANOPTIC_ON: True   # 测 PQ
+  SEMANTIC_ON: True   # 测 mIoU
 
 INPUT:
   DATASET_MAPPER_NAME: "mask_former_semantic" 
@@ -43,5 +47,5 @@ INPUT:
     SIZE: (1008, 1008)
     # 如果遇到显存不够，可以把 SINGLE_CATEGORY_MAX_AREA 设为 1.0 忽略限制
 
-OUTPUT_DIR: ./out/semantic/sam3MC/bs16_1e-4_150k
+OUTPUT_DIR: ./out/semantic/coco_stuff/bs16_2e-5_obj1e5_coco1ep
   

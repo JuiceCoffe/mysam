@@ -164,9 +164,9 @@ class SAM3MC_o365(nn.Module):
         # -------------------------------------------------------
         # 【新增】Inference 参数配置
         # -------------------------------------------------------
-        self.semantic_on = cfg.TEST.SEMANTIC_ON if hasattr(cfg.TEST, "SEMANTIC_ON") else True
-        self.instance_on = cfg.TEST.INSTANCE_ON if hasattr(cfg.TEST, "INSTANCE_ON") else True
-        self.panoptic_on = cfg.TEST.PANOPTIC_ON if hasattr(cfg.TEST, "PANOPTIC_ON") else False
+        self.semantic_on = cfg.TEST.SEMANTIC_ON
+        self.instance_on = cfg.TEST.INSTANCE_ON 
+        self.panoptic_on = cfg.TEST.PANOPTIC_ON 
         
         # 阈值设置 (如果没有在 cfg 定义，给默认值)
         self.object_mask_threshold = 0.01
@@ -219,13 +219,22 @@ class SAM3MC_o365(nn.Module):
                 res.append(x_)
             return res
         # get text classifier
+        # --- 修改开始：解耦 train 和 test 的读取逻辑 ---
+        
+        # 1. 获取测试集类别 (优先读取 stuff_classes 以包含全景类别)
         try:
-            class_names = split_labels(metadata.stuff_classes) # it includes both thing and stuff
-            train_class_names = split_labels(train_metadata.stuff_classes)
-        except:
-            # this could be for insseg, where only thing_classes are available
+            class_names = split_labels(metadata.stuff_classes)
+        except AttributeError:
             class_names = split_labels(metadata.thing_classes)
+
+        # 2. 获取训练集类别 (独立处理，避免影响测试集)
+        try:
+            train_class_names = split_labels(train_metadata.stuff_classes)
+        except AttributeError:
             train_class_names = split_labels(train_metadata.thing_classes)
+            
+        # --- 修改结束 ---
+
         train_class_names = {l for label in train_class_names for l in label}
         category_overlapping_list = []
         self.vis_class_names = class_names
@@ -361,9 +370,13 @@ class SAM3MC_o365(nn.Module):
 
             file_names = [x["file_name"] for x in batched_inputs]
             file_names = [x.split('/')[-1].split('.')[0] for x in file_names]
-
-            meta = batched_inputs[0]["meta"]
             
+            if 'meta' in batched_inputs[0]:
+                meta = batched_inputs[0]["meta"]
+            else:
+                meta = batched_inputs[0]
+            
+            # print("keys of meta:", meta.keys())
             dataname = meta['dataname']
             
             # 图形特征
@@ -532,9 +545,12 @@ class SAM3MC_o365(nn.Module):
             if use_aux or i == 5 :
                 tp_queries = queries[i,:,:N,:].clone() # 避免DAC造成的tp_queries翻倍
                 tp_queries = F.normalize(tp_queries, dim=-1, p=2)
-
-                logit_scale = torch.clamp(self.logit_scale.exp(), max=30.0)
+                
+                
                 query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
+                
+                logit_scale = self.logit_scale
+                # logit_scale = torch.clamp(logit_scale.exp(), max=30.0)
                 query_names_results = logit_scale * query_names_results + self.logit_bias
 
                 query_cls_results= []
@@ -607,22 +623,6 @@ class SAM3MC_o365(nn.Module):
                     align_corners=False
                 ).squeeze(0)
 
-
-                # # =======================================================
-                # # 【新】整洁的可视化调用
-                # # =======================================================
-                # # 2. 生成实例分割结果 (Instances对象)
-                # inst_res = self.instance_inference(
-                #     mask_cls_logits[i], mask_pred_i, dataname
-                # )
-                
-                # self.save_visualization_debug(
-                #     batched_inputs[i], 
-                #     inst_res, 
-                #     save_dir="./debug_vis_o365"
-                # )
-                # # =======================================================
-
                 res = {}
                 dataname = batched_inputs[i]["meta"]["dataname"]
 
@@ -650,18 +650,18 @@ class SAM3MC_o365(nn.Module):
                     #     # Objects365 / LVIS 在 thing_classes 里
                     #     current_class_names = meta.thing_classes
                     
-                    # # 3. 只有在需要可视化时才运行绘图 (建议加个概率，不然太慢)
-                    # if random.random() < 0.1: # 抽样 10% 进行可视化
-                    #     pred_result = semseg.argmax(0).cpu()
-                        
-                    #     # 4. 传入正确的 current_class_names
-                    #     visualize_segmentation(
-                    #         pred_result=pred_result,
-                    #         gt_result=batched_inputs[i]["sem_seg"].to(self.device), # 注意索引改为了 i
-                    #         class_names=current_class_names + ['background'],     # 修正这里！
-                    #         original_image_tensor=batched_inputs[i]["image"],     # 注意索引改为了 i
-                    #         save_path=f"./show_queries_test/{batched_inputs[i]['file_name'].split('/')[-1].split('.')[0]}.png"
-                    #     )
+                    # 3. 只有在需要可视化时才运行绘图 (建议加个概率，不然太慢)
+
+                    # pred_result = semseg.argmax(0).cpu()
+                    
+                    # # 4. 传入正确的 current_class_names
+                    # visualize_segmentation(
+                    #     pred_result=pred_result,
+                    #     gt_result=batched_inputs[i]["sem_seg"].to(self.device), # 注意索引改为了 i
+                    #     class_names=current_class_names + ['background'],     # 修正这里！
+                    #     original_image_tensor=batched_inputs[i]["image"],     # 注意索引改为了 i
+                    #     save_path=f"./show_queries_test/{batched_inputs[i]['file_name'].split('/')[-1].split('.')[0]}.png"
+                    # )
                     # # =========== 修改结束 ===========
 
                 # --- B. 全景分割 (Panoptic Segmentation) ---
@@ -809,144 +809,6 @@ class SAM3MC_o365(nn.Module):
             result.pred_boxes = Boxes(torch.zeros(0, 4, device=self.device))
             
         return result
-
-    @torch.no_grad()
-    def save_visualization_debug(self, batched_input, pred_instances, save_dir="./debug_vis"):
-        """
-        封装好的可视化步骤：确保所有张量在同一设备（CPU）上进行计算
-        """
-        import os
-        
-        # 1. 准备原图
-        # 既然之前的经验证明它是 0-255，我们直接转换即可，不需要 * std + mean
-        img_tensor = batched_input["image"].detach().clone().to("cpu")
-        
-        # 直接转为 numpy [H, W, 3] uint8
-        # 注意：这里假设输入是 RGB 格式 (0-255)
-        img_np = img_tensor.permute(1, 2, 0).numpy().clip(0, 255).astype("uint8")
-
-        # 4. 准备 GT (如果存在) 并移到 CPU
-        gt_instances = None
-        if "instances" in batched_input:
-            gt_instances = batched_input["instances"].to("cpu")
-
-        # 5. 获取 Metadata
-        dataname = batched_input["meta"]["dataname"]
-        if hasattr(self, "test_metadata") and dataname in self.test_metadata:
-            meta = self.test_metadata[dataname]
-        else:
-            meta = MetadataCatalog.get(dataname)
-
-        # 6. 构建保存路径
-        file_name = batched_input["file_name"].split('/')[-1]
-        file_name = os.path.splitext(file_name)[0] + ".jpg"
-        os.makedirs(save_dir, exist_ok=True)
-        full_path = os.path.join(save_dir, file_name)
-
-        # 7. 调用底层绘图逻辑 (pred_instances 也要移到 CPU)
-        self._plot_side_by_side(
-            img_np, 
-            pred_instances.to("cpu"), 
-            gt_instances, 
-            meta, 
-            full_path
-        )
-
-    @staticmethod
-    def _plot_side_by_side(img_np, pred_instances, gt_instances, metadata, save_path):
-        """
-        底层静态绘图函数：增加了对齐 Mask 和 Image 尺寸的逻辑
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import Rectangle
-        import torch.nn.functional as F
-        
-        h, w = img_np.shape[:2] # 这里的 h, w 是 1008
-        ignore_index = 255
-
-        def instances_to_map(instances):
-            canvas = np.full((h, w), ignore_index, dtype=np.int64)
-            if instances is None or len(instances) == 0:
-                return canvas
-            
-            if instances.has("pred_masks"):
-                masks = instances.pred_masks # [N, H_mask, W_mask]
-                classes = instances.pred_classes
-            else: # GT
-                masks = instances.gt_masks.tensor if hasattr(instances.gt_masks, "tensor") else instances.gt_masks.rasterize((h,w)).tensor
-                classes = instances.gt_classes
-            
-            # --- 核心修复：确保 masks 的尺寸与 canvas (h, w) 完全一致 ---
-            if masks.shape[-2:] != (h, w):
-                # 将 masks 临时转为 float 进行插值，对齐到 1008x1008
-                masks = F.interpolate(
-                    masks.unsqueeze(0).float(), 
-                    size=(h, w), 
-                    mode="bilinear", 
-                    align_corners=False
-                ).squeeze(0)
-            
-            # 按面积降序排列
-            areas = masks.sum(dim=(1, 2))
-            sorted_idxs = torch.argsort(areas, descending=True)
-
-            masks = masks.cpu().numpy()
-            classes = classes.cpu().numpy()
-
-            for i in sorted_idxs:
-                m = masks[i] > 0.5 # 二值化
-                canvas[m] = classes[i]
-            return canvas
-
-        # 下面逻辑保持不变...
-        pred_map = instances_to_map(pred_instances)
-        gt_map = instances_to_map(gt_instances)
-
-        # 获取颜色和类别名
-        try:
-            class_names = metadata.thing_classes
-        except:
-            class_names = metadata.stuff_classes
-        
-        num_classes = len(class_names)
-        np.random.seed(42)
-        palette = np.random.randint(0, 255, size=(num_classes + 1, 3))
-
-        def map_to_rgb(idx_map):
-            out = np.zeros((h, w, 3), dtype=np.uint8)
-            unique_ids = np.unique(idx_map)
-            for uid in unique_ids:
-                if uid == ignore_index:
-                    out[idx_map == uid] = [40, 40, 40] # 深灰背景
-                elif uid < num_classes:
-                    out[idx_map == uid] = palette[uid]
-            return out
-
-        pred_rgb = map_to_rgb(pred_map)
-        gt_rgb = map_to_rgb(gt_map)
-
-        fig, ax = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
-        ax[0].imshow(img_np)
-        ax[0].set_title("Input Image (Cropped)")
-        ax[0].axis("off")
-        ax[1].imshow(pred_rgb)
-        ax[1].set_title("Pred")
-        ax[1].axis("off")
-        ax[2].imshow(gt_rgb)
-        ax[2].set_title("GT")
-        ax[2].axis("off")
-
-        present_ids = np.unique(np.concatenate([pred_map.flatten(), gt_map.flatten()]))
-        handles = []
-        for uid in present_ids:
-            if uid != ignore_index and uid < num_classes:
-                handles.append(Rectangle((0,0),1,1, color=palette[uid]/255.0, label=f"{class_names[uid]}"))
-        
-        if handles:
-            fig.legend(handles=handles, loc='lower center', ncol=min(8, len(handles)), fontsize=8)
-
-        plt.savefig(save_path, dpi=100)
-        plt.close(fig)
 
 def get_gt_labels_from_sem_seg(sem_seg):
     """
