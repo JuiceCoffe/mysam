@@ -549,8 +549,8 @@ class SAM3MC_o365(nn.Module):
                 
                 query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
                 
-                logit_scale = self.logit_scale
-                # logit_scale = torch.clamp(logit_scale.exp(), max=30.0)
+                logit_scale = self.logit_scale.exp() # 必须取指数！使其变为 ~14.2 或者更大
+                logit_scale = torch.clamp(logit_scale, max=100.0) # 加上上限防止溢出
                 query_names_results = logit_scale * query_names_results + self.logit_bias
 
                 query_cls_results= []
@@ -634,33 +634,51 @@ class SAM3MC_o365(nn.Module):
                     semseg = torch.einsum("qc,qhw->chw", mask_cls_prob, mask_pred_prob)
                     res["sem_seg"] = semseg
 
-                    # # =========== 修改开始 ===========
-                    # # 1. 动态获取当前数据集的元数据
+                    # # =========== 修改开始：为可视化准备 Square 数据 ===========
+                    
+                    # # 1. 获取当前输入 Tensor 的尺寸 (即正方形尺寸，例如 1024x1024)
+                    # # batched_inputs[i]["image"] 是经过 mapper 处理后的图
+                    # tensor_h, tensor_w = batched_inputs[i]["image"].shape[-2:]
+                    
+                    # # 2. 将 Logits 插值到 Tensor 尺寸 (而不是原图尺寸)
+                    # # 注意：这里要用原始的 mask_pred_logits[i]，不要用已经 resize 过的 mask_pred_i
+                    # mask_pred_i_square = F.interpolate(
+                    #     mask_pred_logits[i].unsqueeze(0), 
+                    #     size=(tensor_h, tensor_w), 
+                    #     mode="bilinear", 
+                    #     align_corners=False
+                    # ).squeeze(0).sigmoid()
+                    
+                    # # 3. 计算 Square 的语义分割结果
+                    # semseg_square = torch.einsum("qc,qhw->chw", mask_cls_prob, mask_pred_i_square)
+                    # pred_result_square = semseg_square.argmax(0).cpu()
+
+                    # # 4. 准备 GT (它本身就是 Square 的，只要搬运到 CPU)
+                    # # 如果 mapper 对 GT 做了 padding，这里就是带 padding 的正方形
+                    # gt_result_square = batched_inputs[i]["sem_seg"].to(self.device)
+
+                    # # 5. 准备 Image (它本身就是 Square 的)
+                    # img_tensor_square = batched_inputs[i]["image"]
+
+                    # # 6. 获取类别名称
                     # current_dataname = batched_inputs[i]["meta"]["dataname"]
                     # if current_dataname in self.test_metadata:
                     #     meta = self.test_metadata[current_dataname]
                     # else:
                     #     meta = MetadataCatalog.get(current_dataname)
                     
-                    # # 2. 获取正确的类别名称列表
                     # try:
-                    #     # ADE20K / COCO Panoptic 通常在 stuff_classes 里
                     #     current_class_names = meta.stuff_classes
                     # except:
-                    #     # Objects365 / LVIS 在 thing_classes 里
                     #     current_class_names = meta.thing_classes
-                    
-                    # 3. 只有在需要可视化时才运行绘图 (建议加个概率，不然太慢)
 
-                    # pred_result = semseg.argmax(0).cpu()
-                    
-                    # # 4. 传入正确的 current_class_names
+                    # # 7. 绘图 (全部传入 Square 的数据)
                     # visualize_segmentation(
-                    #     pred_result=pred_result,
-                    #     gt_result=batched_inputs[i]["sem_seg"].to(self.device), # 注意索引改为了 i
-                    #     class_names=current_class_names + ['background'],     # 修正这里！
-                    #     original_image_tensor=batched_inputs[i]["image"],     # 注意索引改为了 i
-                    #     save_path=f"./show_queries_test/{batched_inputs[i]['file_name'].split('/')[-1].split('.')[0]}.png"
+                    #     pred_result=pred_result_square,       # 修改点：传入 Square 预测
+                    #     gt_result=gt_result_square,           # 本身就是 Square
+                    #     class_names=current_class_names + ['background'],
+                    #     original_image_tensor=img_tensor_square, # 本身就是 Square
+                    #     save_path=f"./show_semantic/{batched_inputs[i]['file_name'].split('/')[-1].split('.')[0]}.png"
                     # )
                     # # =========== 修改结束 ===========
 

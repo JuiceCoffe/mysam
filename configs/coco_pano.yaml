@@ -38,8 +38,8 @@ INPUT:
   # 这个参数控制 ResizeScale 的目标尺寸和 FixedSizeCrop 的裁剪尺寸
   IMAGE_SIZE: 1008
   # 控制 ResizeScale 的缩放比例
-  MIN_SCALE: 1.0
-  MAX_SCALE: 1.0
+  MIN_SCALE: 0.1
+  MAX_SCALE: 2.0
   # 图片读取格式
   FORMAT: "RGB"
 
