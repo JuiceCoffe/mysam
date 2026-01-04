@@ -124,7 +124,7 @@ class SAM3MC_o365(nn.Module):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)) # 这是一个经验值
 
         self.use_cdt = False
-        # self.use_cdt = True
+        self.use_cdt = True
         if self.use_cdt:
             self.cdt = ContentDependentTransfer(d_model = 256, nhead = 8, panoptic_on = True)
 
