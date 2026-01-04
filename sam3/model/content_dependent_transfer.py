@@ -75,7 +75,9 @@ class ContentDependentTransfer(nn.Module):
         pos = self.pe_layer(img_feat, None).flatten(2).permute(2, 0, 1)  # hw * b * c
         img_feat = img_feat.flatten(2).permute(2, 0, 1)  # hw * b * c
 
-        bias = self.cross_atten(text_classifier.permute(1, 0, 2), img_feat, memory_mask=None, memory_key_padding_mask=None, pos=pos, query_pos=None)
+        output = self.cross_atten(text_classifier.permute(1, 0, 2), img_feat, memory_mask=None, memory_key_padding_mask=None, pos=pos, query_pos=None)
 
-        return bias.permute(1, 0, 2) 
+        output = F.normalize(output, dim=-1) 
+
+        return output.permute(1, 0, 2)
 
