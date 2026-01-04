@@ -5,9 +5,9 @@ MODEL:
   SAM3:
     BPE_PATH: "sam3/assets/bpe_simple_vocab_16e6.txt.gz"
     ENABLE_SEGMENTATION: True
-  # WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
+  WEIGHTS: "/data/hmp/huggingface/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
   # WEIGHTS: "/root/hub_home/hub/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt" 
-  WEIGHTS: /data/hmp/sam3.pt
+  # WEIGHTS: /data/hmp/sam3.pt
   # WEIGHTS: weights/obj1e5_model_0024999.pth
 DATASETS:
   TRAIN: ("objects365_v1_masktrain",) 
@@ -16,12 +16,12 @@ DATASETS:
 SOLVER:
   AMP:
     ENABLED: True
-  IMS_PER_BATCH: 4
+  IMS_PER_BATCH: 6
   # IMS_PER_BATCH: 3
   BASE_LR: 0.00002
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 300000 # 295000 # 55000 
-  CHECKPOINT_PERIOD: 50000
+  MAX_ITER: 200000 # 295000 # 55000 
+  CHECKPOINT_PERIOD: 20000
 
   CLASS_WEIGHT: 2.0
   MASK_WEIGHT: 5.0
@@ -29,7 +29,7 @@ SOLVER:
   USE_AUX : True
 
 TEST:
-  EVAL_PERIOD: 50000
+  EVAL_PERIOD: 20000
   INSTANCE_ON: True   # 测 AP (Objects365 的主要指标)
   PANOPTIC_ON: True   # 测 PQ
   SEMANTIC_ON: True   # 测 mIoU
@@ -44,6 +44,6 @@ INPUT:
   # 图片读取格式
   FORMAT: "RGB"
 
-OUTPUT_DIR: ./out/obj/bs4_2e-5_obj2ep
+OUTPUT_DIR: ./out/obj/bs6_2e-5_obj2ep
 # OUTPUT_DIR: ./out/test
   

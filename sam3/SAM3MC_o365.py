@@ -306,13 +306,14 @@ class SAM3MC_o365(nn.Module):
                 
                 # self.language_features = language_features.detach() # num_names , L, D
                 # self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
-                self.language_mask = torch.zeros(
+                self.train_language_mask = torch.zeros(
                     (1,text_classifier.shape[0], 1), 
                     dtype=torch.bool, 
                     device=self.device
                 )
                 self.train_text_classifier = text_classifier.detach()
                 self.train_dataname = dataname
+            self.language_mask = self.train_language_mask
             return self.train_text_classifier, self.train_num_templates
         else:
             if self.test_dataname != dataname:
@@ -345,13 +346,14 @@ class SAM3MC_o365(nn.Module):
                 
                 # self.language_features = language_features.detach() # num_names , L, D
                 # self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
-                self.language_mask = torch.zeros(
+                self.test_language_mask = torch.zeros(
                     (1,text_classifier.shape[0], 1), 
                     dtype=torch.bool, 
                     device=self.device
                 )
                 self.test_text_classifier = text_classifier.detach()
                 self.test_dataname = dataname
+            self.language_mask = self.test_language_mask
             return self.test_text_classifier, self.test_num_templates
 
     @property
