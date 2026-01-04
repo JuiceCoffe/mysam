@@ -10,18 +10,18 @@ MODEL:
   WEIGHTS: /data/hmp/sam3.pt
   # WEIGHTS: weights/obj1e5_model_0024999.pth
 DATASETS:
-  # TRAIN: ("objects365_v1_masktrain",) 
-  TRAIN: ("coco_2017_train_panoptic",)
+  TRAIN: ("objects365_v1_masktrain",) 
+  # TRAIN: ("coco_2017_train_panoptic",)
   TEST: ('openvocab_ade20k_panoptic_val',) 
 SOLVER:
   AMP:
     ENABLED: True
-  IMS_PER_BATCH: 8
+  IMS_PER_BATCH: 4
   # IMS_PER_BATCH: 3
   BASE_LR: 0.00002
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 7500 # 295000 # 55000 
-  CHECKPOINT_PERIOD: 2500
+  MAX_ITER: 300000 # 295000 # 55000 
+  CHECKPOINT_PERIOD: 50000
 
   CLASS_WEIGHT: 2.0
   MASK_WEIGHT: 5.0
@@ -29,7 +29,7 @@ SOLVER:
   USE_AUX : True
 
 TEST:
-  EVAL_PERIOD: 2500
+  EVAL_PERIOD: 50000
   INSTANCE_ON: True   # 测 AP (Objects365 的主要指标)
   PANOPTIC_ON: True   # 测 PQ
   SEMANTIC_ON: True   # 测 mIoU
@@ -39,10 +39,11 @@ INPUT:
   # 这个参数控制 ResizeScale 的目标尺寸和 FixedSizeCrop 的裁剪尺寸
   IMAGE_SIZE: 1008
   # 控制 ResizeScale 的缩放比例
-  MIN_SCALE: 1.0
-  MAX_SCALE: 1.0
+  MIN_SCALE: 0.2
+  MAX_SCALE: 2.0
   # 图片读取格式
   FORMAT: "RGB"
 
-OUTPUT_DIR: ./out/instance/bs16_2e-5_obj1e5_coco1ep
+OUTPUT_DIR: ./out/obj/bs4_2e-5_obj2ep
+# OUTPUT_DIR: ./out/test
   

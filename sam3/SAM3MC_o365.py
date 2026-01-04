@@ -38,7 +38,11 @@ from maft.utils.text_templetes import VILD_PROMPT
 
 from .loss.matcher import HungarianMatcher
 from .loss.criterion import SetCriterion
+from sam3.model.content_dependent_transfer import ContentDependentTransfer
+
 from maft.modeling.transformer_decoder.fcclip_transformer_decoder import MaskPooling, get_classification_logits
+
+
 
 import random
 
@@ -93,11 +97,21 @@ class SAM3MC_o365(nn.Module):
             self.detector.eval()
         print("SAM3创建成功!")
 
+        # -------------------------------------------------------
+        # 【新增】Inference 参数配置
+        # -------------------------------------------------------
+        self.semantic_on = cfg.TEST.SEMANTIC_ON
+        self.instance_on = cfg.TEST.INSTANCE_ON 
+        self.panoptic_on = cfg.TEST.PANOPTIC_ON 
+        
+        # 阈值设置 (如果没有在 cfg 定义，给默认值)
+        self.object_mask_threshold = 0.01
+        self.overlap_threshold = 0.8
+        self.test_topk_per_image = 100
 
         # -------------------------------------------------------
         # 新增模块
         # -------------------------------------------------------
-        self.mask_pooling = MaskPooling()
 
         # 【新增】初始化 logit_bias
         # 我们希望初始概率 p = 0.01
@@ -108,6 +122,11 @@ class SAM3MC_o365(nn.Module):
 
         # 在 __init__ 中
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)) # 这是一个经验值
+
+        self.use_cdt = False
+        # self.use_cdt = True
+        if self.use_cdt:
+            self.cdt = ContentDependentTransfer(d_model = 256, nhead = 8, panoptic_on = True)
 
         # -------------------------------------------------------
         # 训练配置
@@ -144,7 +163,7 @@ class SAM3MC_o365(nn.Module):
 
         # building criterion
         matcher = HungarianMatcher(
-            cost_class=class_weight,
+            cost_class=class_weight * 0.5,
             cost_mask=mask_weight,
             cost_dice=dice_weight,
             num_points=cfg.SOLVER.TRAIN_NUM_POINTS,
@@ -161,17 +180,7 @@ class SAM3MC_o365(nn.Module):
             importance_sample_ratio=cfg.SOLVER.IMPORTANCE_SAMPLE_RATIO,
         )
 
-        # -------------------------------------------------------
-        # 【新增】Inference 参数配置
-        # -------------------------------------------------------
-        self.semantic_on = cfg.TEST.SEMANTIC_ON
-        self.instance_on = cfg.TEST.INSTANCE_ON 
-        self.panoptic_on = cfg.TEST.PANOPTIC_ON 
-        
-        # 阈值设置 (如果没有在 cfg 定义，给默认值)
-        self.object_mask_threshold = 0.01
-        self.overlap_threshold = 0.8
-        self.test_topk_per_image = 100
+
 
         self._freeze()
 
@@ -289,14 +298,19 @@ class SAM3MC_o365(nn.Module):
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
 
                 text_classifier[language_mask.view(text_classifier.shape[0],text_classifier.shape[1],text_classifier.shape[2])] = 0.0 # [num_names, VILD_PROMPT, L, D] 掩码掉 padding 部分
-                language_features = text_classifier.mean(1) # num_names, L, D
+                # language_features = text_classifier.mean(1) # num_names, L, D
                 text_classifier = text_classifier.mean(-2) 
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 text_classifier = text_classifier.mean(1)
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 
-                self.language_features = language_features.detach() # num_names , L, D
-                self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                # self.language_features = language_features.detach() # num_names , L, D
+                # self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                self.language_mask = torch.zeros(
+                    (1,text_classifier.shape[0], 1), 
+                    dtype=torch.bool, 
+                    device=self.device
+                )
                 self.train_text_classifier = text_classifier.detach()
                 self.train_dataname = dataname
             return self.train_text_classifier, self.train_num_templates
@@ -323,14 +337,19 @@ class SAM3MC_o365(nn.Module):
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
 
                 text_classifier[language_mask.view(text_classifier.shape[0],text_classifier.shape[1],text_classifier.shape[2])] = 0.0 # [num_names, VILD_PROMPT, L, D] 掩码掉 padding 部分
-                language_features = text_classifier.mean(1) # num_names, L, D
+                # language_features = text_classifier.mean(1) # num_names, L, D
                 text_classifier = text_classifier.mean(-2) 
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 text_classifier = text_classifier.mean(1)
                 text_classifier /= (text_classifier.norm(dim=-1, keepdim=True) + 1e-6)
                 
-                self.language_features = language_features.detach() # num_names , L, D
-                self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                # self.language_features = language_features.detach() # num_names , L, D
+                # self.language_mask = torch.min(language_mask.view(language_features.shape[0],len(VILD_PROMPT),language_features.shape[1]), dim=1).values# [num_names, L]
+                self.language_mask = torch.zeros(
+                    (1,text_classifier.shape[0], 1), 
+                    dtype=torch.bool, 
+                    device=self.device
+                )
                 self.test_text_classifier = text_classifier.detach()
                 self.test_dataname = dataname
             return self.test_text_classifier, self.test_num_templates
@@ -393,6 +412,7 @@ class SAM3MC_o365(nn.Module):
             
             # text_classifier, num_templates = self.get_text_classifier(meta['dataname'])
             text_classifier, num_templates = self.get_text_classifier(dataname)
+            text_classifier = text_classifier.clone()
 
             # others
             geometric_prompt = self.detector._get_dummy_prompt(bs)
@@ -435,22 +455,28 @@ class SAM3MC_o365(nn.Module):
             if bs == 1:
                 language_features_input = language_features_input.unsqueeze(0)
                 language_mask_input = language_mask_input.unsqueeze(0)
+            
+            language_features_input = language_features_input.reshape(bs, -1, language_features_input.shape[-1]) # (bs, num_names * L, dim)
+            language_features_input = language_features_input.permute(1, 0, 2)
 
         else:
-            language_features_input = self.language_features.expand(bs, -1, -1, -1) # (bs, num_names, L, dim)
+            # language_features_input = self.language_features.expand(bs, -1, -1, -1) # (bs, num_names, L, dim)
+            language_features_input = self.classifier2feat(text_classifier,bs)
             language_mask_input = self.language_mask.expand(bs, -1, -1) # (bs, num_names, L)
+            # print("language_features_input:",language_features_input.shape)
+            # print("language_mask_input:",language_mask_input.shape)
 
         # print("shape of input:",language_features_input.shape, language_mask_input.shape)
-        language_features_input = language_features_input.reshape(bs, -1, language_features_input.shape[-1]) # (bs, num_names * L, dim)
         language_mask_input = language_mask_input.reshape(bs, -1) # (bs, num_names * L)
         # print("shape of input after reshape:",language_features_input.shape, language_mask_input.shape)
         
+
 
         backbone_out={
             "img_batch_all_stages": img_feat,
             "vision_pos_enc": backbone_out_vision["vision_pos_enc"],
             "backbone_fpn": backbone_fpn,
-            "language_features": language_features_input.permute(1, 0, 2), # (num_names * L, bs, dim)
+            "language_features": language_features_input, # (num_names * L, bs, dim)
             "language_mask": language_mask_input, # bs, (num_names * L)
         }
 
@@ -473,7 +499,25 @@ class SAM3MC_o365(nn.Module):
                 "backbone_out": backbone_out,
             },
         }
-        # print("keys of out before decoder:", out.keys()) # s(['encoder_hidden_states', 'prev_encoder_out'])
+
+        if self.use_cdt:
+            fusion_feat = encoder_out["encoder_hidden_states"] # H'*W', bs, D
+            fusion_feat = fusion_feat.permute(1,0,2) # bs, H'*W', D
+            fusion_feat = fusion_feat.reshape(bs, img_feat.shape[-2], img_feat.shape[-1], fusion_feat.shape[-1])
+            fusion_feat = fusion_feat.permute(0, 3, 1, 2)
+            # print("fusion_feat:",fusion_feat.shape)
+            # print("text_classifier:",text_classifier.shape)
+            text_classifier = self.cdt(fusion_feat,text_classifier)
+            language_features_input = self.classifier2feat(text_classifier,bs)
+
+            backbone_out['language_features'] = language_features_input
+            out['prev_encoder_out']["backbone_out"] = backbone_out
+            
+            with torch.profiler.record_function("SAM3Image._re_encode_prompt_cdt"):
+                prompt, prompt_mask, _ = self.detector._encode_prompt(
+                    backbone_out, find_input, geometric_prompt
+                )
+
         # Run the decoder
         with torch.profiler.record_function("SAM3Image._run_decoder"):
             out, hs = self.detector._run_decoder(
@@ -546,9 +590,12 @@ class SAM3MC_o365(nn.Module):
                 tp_queries = queries[i,:,:N,:].clone() # 避免DAC造成的tp_queries翻倍
                 tp_queries = F.normalize(tp_queries, dim=-1, p=2)
                 
-                
-                query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
-                
+                if self.use_cdt:
+                    query_names_results = torch.einsum("bnd,bcd->bnc", tp_queries, text_classifier) # bs, N, C
+                else:
+                    query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
+
+
                 logit_scale = self.logit_scale.exp() # 必须取指数！使其变为 ~14.2 或者更大
                 logit_scale = torch.clamp(logit_scale, max=100.0) # 加上上限防止溢出
                 query_names_results = logit_scale * query_names_results + self.logit_bias
@@ -700,7 +747,17 @@ class SAM3MC_o365(nn.Module):
 
             return results
 
-
+    def classifier2feat(self,text_classifier,bs):
+        # print("text_classifier:",text_classifier.shape)
+        if len(text_classifier.shape)==2:
+            language_features_input = text_classifier.unsqueeze(0)
+        else:
+            assert text_classifier.shape[0] == bs
+            language_features_input = text_classifier.clone()
+        language_features_input =  language_features_input.expand(bs,-1,-1)
+        language_features_input = language_features_input.reshape(bs, -1, language_features_input.shape[-1]) # (bs, num_names * L, dim) 
+        language_features_input = language_features_input.permute(1, 0, 2)
+        return language_features_input
 
     def panoptic_inference(self, mask_cls, mask_pred, dataname):
         # mask_cls: [Q, K] (Logits)

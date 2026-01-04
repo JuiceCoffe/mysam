@@ -535,8 +535,8 @@ class SAM3MC(nn.Module):
         #     prompt_mask=text_classifier_mask.expand(-1, bs), # C, bs 
         # ) # [bs, C, N, 1]
 
-        # 用 maskpooling 代替点积score
-        fusion_feat = encoder_out["encoder_hidden_states"] # H'*W', bs, D
+        # 用 maskpooling 代替点积scorefusion
+        _feat = encoder_out["encoder_hidden_states"] # H'*W', bs, D
         fusion_feat = fusion_feat.permute(1,0,2) # bs, H'*W', D
         fusion_feat = fusion_feat.reshape(bs, img_feat.shape[-2], img_feat.shape[-1], fusion_feat.shape[-1])
         # print("fusion_feat shape:", fusion_feat.shape) # bs, H'*W', D
