@@ -1,6 +1,6 @@
 *.png
 output/
-datasets/
+/datasets/
 *.pyc
 maft/modeling/pixel_decoder/
 out/
