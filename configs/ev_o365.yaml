@@ -1,7 +1,7 @@
 _BASE_: ./o365.yaml
 
 MODEL:
-  WEIGHTS: /root/hmp/obj4e5.pth
+  WEIGHTS: /data/hmp/mysam/weights/obj4e5.pth
 DATASETS:
   # TRAIN: ("objects365_v1_masktrain",) 
   # TRAIN: ("coco_2017_train_panoptic",)

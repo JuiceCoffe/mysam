@@ -68,6 +68,14 @@ from sam3.SAM3MC_DINO import SAM3MC_DINO
 from sam3.SAM3MC_o365 import SAM3MC_o365
 
 
+# 临时修复 lvis 报错：AttributeError: module 'numpy' has no attribute 'float'.
+import numpy as np
+try:
+    np.float = float
+except AttributeError:
+    pass  # 如果 numpy 版本较低本身支持，则忽略
+
+
 class Trainer(DefaultTrainer):
     """
     Extension of the Trainer class adapted to FCCLIP.

@@ -19,7 +19,7 @@ SOLVER:
   # IMS_PER_BATCH: 3
   BASE_LR: 0.00002
   LR_SCHEDULER_NAME: WarmupPolyLR
-  MAX_ITER: 30000 # 295000 # 55000 
+  MAX_ITER: 60000 # 295000 # 55000 
   CHECKPOINT_PERIOD: 7500
 
   CLASS_WEIGHT: 2.0
@@ -43,5 +43,5 @@ INPUT:
   # 图片读取格式
   FORMAT: "RGB"
 
-OUTPUT_DIR: ./out/coco_pano/bs8_2e-5_2ep
+OUTPUT_DIR: ./out/coco_pano/cdt2_4ep
   
