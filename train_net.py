@@ -40,6 +40,10 @@ from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.solver.build import maybe_add_gradient_clipping
 from detectron2.utils.logger import setup_logger
 
+# from detectron2.data.datasets import register_lvis_instances
+# register_lvis_instances("lvis_v1_val", {}, "datasets/lvis/lvis_v1_val.json", "datasets/lvis/coco/val2017")
+# # register_lvis_instances("lvis_v1_train", {}, "datasets/lvis/lvis_v1_train.json", "datasets/lvis/coco/train2017")
+
 from maft import (
     COCOInstanceNewBaselineDatasetMapper,
     COCOPanopticNewBaselineDatasetMapper,
@@ -80,6 +84,13 @@ class Trainer(DefaultTrainer):
         # 1. 实例分割 (Instance Segmentation) -> 对应 INSTANCE_ON
         #    通常用于计算 AP (Average Precision)
         # ---------------------------------------------------------
+    
+        if "lvis" in dataset_name:
+            print("="*20,"使用lvis评估器","="*20)
+            evaluator_list.append( LVISEvaluator(dataset_name, cfg, True, output_folder))
+            return evaluator_list
+
+
         if cfg.TEST.INSTANCE_ON:
             evaluator_list.append(InstanceSegEvaluator(dataset_name, output_dir=output_folder))
 
@@ -243,23 +254,6 @@ class Trainer(DefaultTrainer):
             optimizer = maybe_add_gradient_clipping(cfg, optimizer)
         return optimizer
 
-    # @classmethod
-    # def test_with_TTA(cls, cfg, model):
-    #     logger = logging.getLogger("detectron2.trainer")
-    #     # In the end of training, run an evaluation with TTA.
-    #     logger.info("Running inference with test-time augmentation ...")
-    #     model = SemanticSegmentorWithTTA(cfg, model)
-    #     evaluators = [
-    #         cls.build_evaluator(
-    #             cfg, name, output_folder=os.path.join(cfg.OUTPUT_DIR, "inference_TTA")
-    #         )
-    #         for name in cfg.DATASETS.TEST
-    #     ]
-    #     res = cls.test(cfg, model, evaluators)
-    #     res = OrderedDict({k + "_TTA": v for k, v in res.items()})
-    #     return res
-
-
 def setup(args):
     """
     Create configs and perform basic setups.
@@ -280,12 +274,6 @@ def setup(args):
     setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="sam3")
     return cfg
 
-# def build_sam3_model(cfg):
-#     SAM3_ROOT = os.getcwd()
-#     bpe_path = os.path.join(SAM3_ROOT, "assets", "bpe_simple_vocab_16e6.txt.gz")
-#     model = build_sam3_image_model(bpe_path=bpe_path)
-#     model.to(torch.device(cfg.MODEL.DEVICE))
-#     return model
 
 def main(args):
     # torch.multiprocessing.set_start_method('spawn')

@@ -1,11 +1,12 @@
 _BASE_: ./o365.yaml
 
 MODEL:
-  WEIGHTS: /data/hmp/mysam/weights/obj4e5.pth
+  WEIGHTS: /root/hmp/obj4e5.pth
 DATASETS:
   # TRAIN: ("objects365_v1_masktrain",) 
   # TRAIN: ("coco_2017_train_panoptic",)
-  TEST: ('openvocab_ade20k_panoptic_val',) 
+  # TEST: ('openvocab_ade20k_panoptic_val',) 
+  TEST: ('lvis_v1_val','openvocab_ade20k_panoptic_val',)
 
 TEST:
   INSTANCE_ON: True   # 测 AP (Objects365 的主要指标)

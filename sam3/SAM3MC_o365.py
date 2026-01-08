@@ -382,7 +382,7 @@ class SAM3MC_o365(nn.Module):
                 meta = batched_inputs[0]
             
             # print("keys of meta:", meta.keys())
-            dataname = meta['dataname']
+            dataname = get_dataname(batched_inputs[0])
             
             # 图形特征
             backbone_out_vision = self.detector.backbone.forward_image(images.tensor)
@@ -635,7 +635,7 @@ class SAM3MC_o365(nn.Module):
                 ).squeeze(0)
 
                 res = {}
-                dataname = batched_inputs[i]["meta"]["dataname"]
+                # dataname = batched_inputs[i]["meta"]["dataname"]
 
                 # --- A. 语义分割 (Semantic Segmentation) ---
                 if self.semantic_on:
@@ -695,10 +695,13 @@ class SAM3MC_o365(nn.Module):
 
                 # --- B. 全景分割 (Panoptic Segmentation) ---
                 if self.panoptic_on:
-                    panoptic_seg, segments_info = self.panoptic_inference(
-                        mask_cls_i, mask_pred_i, dataname
-                    )
-                    res["panoptic_seg"] = (panoptic_seg, segments_info)
+                    excluded_datasets = ["lvis_v1_val", "lvis_v1_train"]
+                    
+                    if dataname not in excluded_datasets:
+                        panoptic_seg, segments_info = self.panoptic_inference(
+                            mask_cls_i, mask_pred_i, dataname
+                        )
+                        res["panoptic_seg"] = (panoptic_seg, segments_info)
                 
                 # --- C. 实例分割 (Instance Segmentation) ---
                 if self.instance_on:
@@ -806,7 +809,11 @@ class SAM3MC_o365(nn.Module):
         # 4. 过滤 Thing Classes (如果是 Panoptic 模式)
         if self.panoptic_on:
             meta = self.test_metadata[dataname] if dataname in self.test_metadata else MetadataCatalog.get(dataname)
-            thing_ids = set(meta.thing_dataset_id_to_contiguous_id.values())
+            if hasattr(meta, 'thing_dataset_id_to_contiguous_id'):
+                thing_ids = set(meta.thing_dataset_id_to_contiguous_id.values())
+            else:
+                # 如果没有映射表，默认使用所有类别的连续索引
+                thing_ids = set(range(len(meta.thing_classes)))
             
             keep = torch.zeros_like(scores_per_image).bool()
             for i, lab in enumerate(labels_per_image):
@@ -967,3 +974,32 @@ def visualize_segmentation(
     except Exception as e:
         print(f"保存失败: {e}")
     plt.close(fig)
+
+def get_dataname(batched_input):
+    """
+    从输入数据中提取或推断 dataname (数据集名称)。
+    逻辑：
+    1. 尝试直接从 meta 或 batched_input 根目录找 'dataname'
+    2. 如果找不到，通过 'file_name' 字符串匹配
+    """
+    # 1. 尝试从 meta 字典或根字典中直接获取
+    if "meta" in batched_input and "dataname" in batched_input["meta"]:
+        return batched_input["meta"]["dataname"]
+    if "dataname" in batched_input:
+        return batched_input["dataname"]
+
+    # 2. 备选方案：通过 file_name 推断
+    # Detectron2 的 dataset_dict 几乎百分之百包含 file_name
+    file_name = batched_input.get("file_name", "")
+    
+    # 逻辑：目前只管 lvis，也可以顺便兼容 ade
+    file_name_lower = file_name.lower()
+    
+    if "lvis" in file_name_lower:
+        return "lvis"
+    elif "ade" in file_name_lower:
+        return "ade20k"
+    
+    # 如果都匹配不上，返回一个默认值或抛出警告
+    # print(f"Warning: Could not infer dataname from {file_name}, using default 'lvis_v1_val'")
+    return "lvis_v1_val"
