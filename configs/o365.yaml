@@ -46,6 +46,6 @@ INPUT:
   # 图片读取格式
   FORMAT: "RGB"
 
-OUTPUT_DIR: ./out/obj/nocdt_2ep
+OUTPUT_DIR: ./out/obj/nocdt_2ep_2
 # OUTPUT_DIR: ./out/test
   

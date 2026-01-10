@@ -285,6 +285,27 @@ def setup(args):
 
 def main(args):
     # torch.multiprocessing.set_start_method('spawn')
+
+    # -------- 1. 新增：预占显存逻辑 --------
+    # 获取当前进程应使用的 GPU 编号
+    # Detectron2 会在 launch 时自动设置好当前进程的设备环境
+    current_device = torch.cuda.current_device()
+    reserve_gb = 22  # 你想要固定的显存大小
+    
+    print(f"==> 进程 {comm.get_rank()} 正在 GPU:{current_device} 上预分配 {reserve_gb}GB 显存...")
+    try:
+        # 预分配 22GB 的空张量
+        # 1024**3 字节 = 1GB
+        temp_tensor = torch.empty(int(reserve_gb * 1024**3), dtype=torch.uint8, device=f'cuda:{current_device}')
+        
+        # 销毁变量，但不要执行 torch.cuda.empty_cache()
+        # 这样显存就会被保留在 PyTorch 的缓存池中，别人抢不走
+        del temp_tensor
+        print(f"==> 进程 {comm.get_rank()} 预分配成功，已占坑。")
+    except RuntimeError as e:
+        print(f"==> 预分配失败 (可能是显存不足以分配 {reserve_gb}GB): {e}")
+    # ------------------------------------
+        
     cfg = setup(args)
 
     if args.eval_only:

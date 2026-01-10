@@ -109,7 +109,7 @@ class SAM3MC_o365(nn.Module):
         self.logit_bias = nn.Parameter(torch.ones([]) * bias_value)
 
         # 在 __init__ 中
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07)) # 这是一个经验值
+        self.logit_scale = nn.Parameter(torch.ones([]) * 0.98) 
 
         self.use_cdt = False
         if self.use_cdt:
