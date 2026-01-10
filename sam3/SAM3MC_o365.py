@@ -44,6 +44,8 @@ from maft.modeling.transformer_decoder.fcclip_transformer_decoder import MaskPoo
 
 import random
 
+import math
+
 
 @META_ARCH_REGISTRY.register()
 class SAM3MC_o365(nn.Module):
@@ -108,8 +110,9 @@ class SAM3MC_o365(nn.Module):
         bias_value = -np.log((1 - prior_prob) / prior_prob)
         self.logit_bias = nn.Parameter(torch.ones([]) * bias_value)
 
-        # 在 __init__ 中
-        self.logit_scale = nn.Parameter(torch.ones([]) * 0.98) 
+        target_multiplier = 2.9029
+        init_value = math.log(target_multiplier)
+        self.logit_scale = nn.Parameter(torch.ones([]) * init_value)
 
         self.use_cdt = False
         if self.use_cdt:
@@ -560,8 +563,8 @@ class SAM3MC_o365(nn.Module):
                     query_names_results = torch.einsum("bnd,cd->bnc", tp_queries, text_classifier) # bs, N, C
                 
                 
-                logit_scale = self.logit_scale.exp() # 必须取指数！使其变为 ~14.2 或者更大
-                logit_scale = torch.clamp(logit_scale, max=100.0) # 加上上限防止溢出
+                logit_scale = self.logit_scale.exp()
+                logit_scale = torch.clamp(logit_scale, max=100.0)
                 query_names_results = logit_scale * query_names_results + self.logit_bias
 
                 query_cls_results= []
