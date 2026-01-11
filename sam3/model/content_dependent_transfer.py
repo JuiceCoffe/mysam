@@ -62,7 +62,8 @@ class ContentDependentTransfer(nn.Module):
         self.cross_atten = ShortCut_CrossAttention(d_model = d_model, nhead = nhead, panoptic_on = panoptic_on)
 
     def forward(self, img_feat, text_classifier, ):
-        text_classifier = text_classifier.unsqueeze(0).repeat(img_feat.shape[0],1,1)
+        if len(text_classifier.shape) == 2:
+            text_classifier = text_classifier.unsqueeze(0).repeat(img_feat.shape[0],1,1)
 
         pos = self.pe_layer(img_feat, None).flatten(2).permute(2, 0, 1)  # hw * b * c
         img_feat = img_feat.flatten(2).permute(2, 0, 1)  # hw * b * c
@@ -72,4 +73,3 @@ class ContentDependentTransfer(nn.Module):
         output = F.normalize(output, dim=-1) 
 
         return output.permute(1, 0, 2)
-
