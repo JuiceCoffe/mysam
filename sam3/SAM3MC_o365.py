@@ -114,9 +114,16 @@ class SAM3MC_o365(nn.Module):
         init_value = math.log(target_multiplier)
         self.logit_scale = nn.Parameter(torch.ones([]) * init_value)
 
-        self.use_cdt = False
+        self.num_cdt = cfg.MODEL.SAM3.NUM_CDT    
+        self.use_cdt = False if cfg.MODEL.SAM3.NUM_CDT == 0 else True
         if self.use_cdt:
-            self.cdt = ContentDependentTransfer(d_model = 256, nhead = 8, panoptic_on = True)
+            # 使用 nn.ModuleList 包装
+            self.cdt = nn.ModuleList([
+                ContentDependentTransfer(d_model=256, nhead=8, panoptic_on=True) 
+                for _ in range(self.num_cdt)
+            ])
+        else:
+            self.cdt = None
         # -------------------------------------------------------
         # 训练配置
         # -------------------------------------------------------
@@ -549,7 +556,9 @@ class SAM3MC_o365(nn.Module):
         aux_outputs = []
 
         if self.use_cdt:
-            text_classifier = self.cdt(img_feat,text_classifier)
+            # text_classifier = self.cdt(img_feat,text_classifier)
+            for layer in self.cdt:
+                text_classifier = layer(img_feat,text_classifier) # 逐层通过
 
         for i in range(6):
             assert queries.shape[0] == 6
